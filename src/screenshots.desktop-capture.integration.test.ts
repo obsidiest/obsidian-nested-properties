@@ -205,11 +205,12 @@ function buildObjectNote(): string {
  */
 async function dismissMenu(): Promise<void> {
   await evalInObsidian({
-    async callback({ lib: { waitUntil } }) {
+    async callback({ lib: { pressKey, waitUntil } }) {
       const MENU_TIMEOUT_IN_MILLISECONDS = 15_000;
       const SETTLE_DELAY_IN_MILLISECONDS = 600;
 
-      document.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Escape' }));
+      // A trusted Escape — the key press a user makes, rather than an event Obsidian is free to ignore.
+      pressKey({ key: 'Escape' });
       document.body.click();
 
       await waitUntil({
@@ -231,10 +232,9 @@ async function dismissMenu(): Promise<void> {
  */
 async function openKeyContextMenu(keyName: string): Promise<void> {
   await evalInObsidian({
-    async callback({ keyName: name, lib: { waitUntil } }) {
+    async callback({ keyName: name, lib: { clickElement, waitUntil } }) {
       const MENU_TIMEOUT_IN_MILLISECONDS = 15_000;
       const SETTLE_DELAY_IN_MILLISECONDS = 900;
-      const HALF = 2;
 
       const keyInput = [...document.querySelectorAll('.metadata-property-key-input')]
         .find((input) => (input.instanceOf(HTMLInputElement) ? input.value : input.textContent) === name);
@@ -244,17 +244,10 @@ async function openKeyContextMenu(keyName: string): Promise<void> {
       }
 
       // Obsidian raises the menu from a `contextmenu` event, and the coordinates
-      // Are where it anchors the menu — dispatched without them it lands in the
-      // Top-left corner, over the properties it is supposed to sit beside.
-      const rect = keyEl.getBoundingClientRect();
-      keyEl.dispatchEvent(
-        new MouseEvent('contextmenu', {
-          bubbles: true,
-          cancelable: true,
-          clientX: rect.left + rect.width / HALF,
-          clientY: rect.top + rect.height / HALF
-        })
-      );
+      // Are where it anchors the menu — without them it lands in the top-left
+      // Corner, over the properties it is supposed to sit beside. A TRUSTED right
+      // Click carries real coordinates and is the gesture a user performs.
+      clickElement({ button: 'right', element: keyEl });
 
       await waitUntil({
         message: 'the nested-key context menu to open',

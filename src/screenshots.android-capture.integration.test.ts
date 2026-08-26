@@ -248,6 +248,10 @@ async function dismissMenu(): Promise<void> {
       const MENU_TIMEOUT_IN_MILLISECONDS = 15_000;
       const SETTLE_DELAY_IN_MILLISECONDS = 600;
 
+      // A permanent exception to the trusted-input convention: `pressKey` is built on
+      // `window.electron`, which does not exist on the phone, so a dispatched event is
+      // The only option here. Obsidian listens for keys on `document`, so this dismisses
+      // As a real key would.
       document.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Escape' }));
       document.body.click();
 
@@ -284,6 +288,8 @@ async function openKeyContextMenu(keyName: string): Promise<void> {
 
       // Obsidian raises the menu from a `contextmenu` event, which is what a long
       // Press produces on a touch screen. The coordinates are where it anchors.
+      // Untrusted by necessity: the trusted `clickElement` the desktop twin uses is
+      // Built on `window.electron`, and there is none on the phone.
       const rect = keyEl.getBoundingClientRect();
       keyEl.dispatchEvent(
         new MouseEvent('contextmenu', {

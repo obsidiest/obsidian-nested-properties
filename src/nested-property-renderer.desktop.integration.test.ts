@@ -383,6 +383,16 @@ describe('nested value preservation integration (issue #7)', () => {
             throw new TypeError('Add-property input not found');
           }
           input.value = 'c';
+          /*
+           * Deliberately an untrusted dispatch rather than the trusted `pressKey`. The listener under
+           * test is the plugin's own (`nested-property-renderer.ts`, `input.addEventListener('keydown')`)
+           * and checks nothing but `ke.key`, so a dispatched event exercises it exactly as a real one
+           * would — there is no `isTrusted` gate anywhere on this path.
+           *
+           * The widget is also rendered into a scratch container and driven synchronously, so a trusted
+           * key press would mean making this probe async and making it depend on real DOM focus landing
+           * in a container Obsidian's own UI may be covering. That is fidelity spent for nothing.
+           */
           input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }));
         } finally {
           textWidget.render = originalRender;
