@@ -1,5 +1,18 @@
 # CHANGELOG
 
+## 1.4.4
+
+- docs(readme): render the same in Obsidian's plugin page as on GitHub
+- chore: update libs
+- chore: update obsidian-dev-utils to 94.6.1
+- chore: update obsidian-dev-utils to 94.6.0
+- fix: override deepmerge-ts to clear GHSA-ggr8-5vv4-36mx
+- test: gate the demo vault by clicking every code button
+- chore: teach cspell the advisory wording
+- chore: update libs
+- docs(demo-vault): give the cumulative walkthrough a reset
+- docs: capture the community-store screenshot set
+
 ## 1.4.3
 
 - docs: make the demo vault the documentation, in the standard layout
