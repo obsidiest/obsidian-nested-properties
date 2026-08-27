@@ -24,6 +24,7 @@ Welcome to the [Nested Properties](https://github.com/mnaoumov/obsidian-nested-p
 ## Display
 
 - [08 Full key display](<./08 Full key display.md>)
+- [11 Property field guides, breadcrumbs, and threading](<./11 Property field guides, breadcrumbs, and threading.md>)
 
 ## Vault-wide operations
 

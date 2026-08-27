@@ -1,5 +1,14 @@
 # CHANGELOG
 
+## 1.5.0
+
+- feat: add searchable settings for property hover breadcrumbs, static tree guides, and property-field threading
+- feat: add clickable, keyboard-navigable property ancestry breadcrumbs in Live Preview, Source, and Reading modes
+- feat: add main-UI and breadcrumb tree guides with active-path, all-branch, root-level, and cursor-activated threading modes
+- feat: add comprehensive Style Settings controls with synchronized precise numeric inputs and themed thread colors
+- test: cover property trees, source frontmatter parsing, breadcrumb navigation, guide geometry, settings defaults, and release configuration
+- build: attest every published release asset with GitHub artifact attestations
+
 ## 1.4.4
 
 - docs(readme): render the same in Obsidian's plugin page as on GitHub

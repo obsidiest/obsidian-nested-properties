@@ -1,3 +1,26 @@
 export class PluginSettings {
+  public isActiveCursorPropertyFieldThreadingEnabled = false;
+  public isActivePropertyFieldThreadingEnabled = true;
+  public isActivePropertyFieldThreadingInHoverBreadcrumbEnabled = true;
+  public isActivePropertyFieldThreadingInMainUiEnabled = true;
+  public isActiveRootLevelPropertyFieldThreadingEnabled = true;
+  public isActiveRootLevelPropertyFieldThreadingInHoverBreadcrumbEnabled = true;
+  public isActiveRootLevelPropertyFieldThreadingInMainUiEnabled = true;
+  public isActiveRootLevelPropertyFieldTreeThreadingEnabled = true;
+  public isAllBranchesOfActivePropertyFieldTreeThreadingEnabled = false;
+  public isAllBranchesOfActivePropertyFieldTreeThreadingInHoverBreadcrumbEnabled = true;
+  public isAllBranchesOfActivePropertyFieldTreeThreadingInMainUiEnabled = true;
+  public isAllBranchesOfActiveRootLevelPropertyFieldTreeThreadingEnabled = false;
+  public isAllBranchesOfActiveRootLevelPropertyFieldTreeThreadingInHoverBreadcrumbEnabled = true;
+  public isAllBranchesOfActiveRootLevelPropertyFieldTreeThreadingInMainUiEnabled = true;
   public isFullKeyDisplayEnabled = false;
+  public isNestedPropertiesMainUiStaticTreeIndentationGuidesEnabled = true;
+  public isPropertyFieldHoverBreadcrumbEnabled = false;
+  public isPropertyFieldHoverBreadcrumbInLivePreviewEnabled = true;
+  public isPropertyFieldHoverBreadcrumbInReadingModeEnabled = true;
+  public isPropertyFieldHoverBreadcrumbInSourceModeEnabled = true;
+  public isPropertyFieldHoverBreadcrumbStaticTreeIndentationGuidesEnabled = true;
+  public isPropertyFieldThreadingEnabled = false;
+  public isPropertyFieldThreadingInHoverBreadcrumbEnabled = true;
+  public isPropertyFieldThreadingInMainUiEnabled = true;
 }

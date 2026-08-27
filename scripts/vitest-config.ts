@@ -89,5 +89,13 @@ export const config = defineObsidianPluginVitestConfig({
         }
       }
     ];
+  },
+  editContext(context: ObsidianPluginVitestConfigContext): void {
+    // The shared test runner supplies this flag for Node releases that expose Web Storage globally.
+    // Some maintained Node builds reject the flag outright, so omit it only when the runtime says
+    // It is unsupported; supported runtimes retain the upstream isolation behavior.
+    if (!process.allowedNodeEnvironmentFlags.has('--no-webstorage')) {
+      context.unitTests.execArgv = [];
+    }
   }
 });

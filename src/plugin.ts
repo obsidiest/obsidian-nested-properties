@@ -2,12 +2,16 @@ import { invokeAsyncSafely } from 'obsidian-dev-utils/async';
 import { OpenDemoVaultCommandHandler } from 'obsidian-dev-utils/obsidian/command-handlers/open-demo-vault-command-handler';
 import { PluginDataHandler } from 'obsidian-dev-utils/obsidian/data-handler';
 import { PluginBase } from 'obsidian-dev-utils/obsidian/plugin/plugin';
+import { getAllDomWindows } from 'obsidian-dev-utils/obsidian/workspace';
 
 import { NestedPropertyRendererComponent } from './nested-property-renderer.ts';
 import { NestedPropertyVaultOpsComponent } from './nested-property-vault-ops-component.ts';
 import { NestedPropertySearchPatchComponent } from './patches/nested-property-search-patch-component.ts';
+import { NestedPropertiesPluginSettingTab } from './plugin-setting-tab.ts';
 import { PluginSettingsComponent } from './plugin-settings-component.ts';
 import { PluginSettings } from './plugin-settings.ts';
+import { PropertyFieldVisualsComponent } from './property-field-visuals.ts';
+import { StyleSettingsPrecisionControls } from './style-settings-precision.ts';
 
 export class Plugin extends PluginBase {
   protected override async onloadImpl(): Promise<void> {
@@ -32,6 +36,33 @@ export class Plugin extends PluginBase {
         pluginSettingsComponent
       })
     );
+    const propertyFieldVisualsComponent = this.addChild(
+      new PropertyFieldVisualsComponent({
+        app: this.app,
+        pluginSettingsComponent
+      })
+    );
+    this.addSettingTab(
+      new NestedPropertiesPluginSettingTab({
+        app: this.app,
+        onSettingsChanged: (): void => {
+          nestedPropertyRendererComponent.refreshSettings();
+          propertyFieldVisualsComponent.refresh();
+        },
+        plugin: this,
+        pluginSettingsComponent
+      })
+    );
+
+    const styleSettingsPrecisionControls = new StyleSettingsPrecisionControls();
+    styleSettingsPrecisionControls.start([...getAllDomWindows(this.app)].map((win) => win.document));
+    this.app.workspace.trigger('parse-style-settings');
+    this.registerEvent(this.app.workspace.on('window-open', (_workspaceWindow, openedWindow) => {
+      styleSettingsPrecisionControls.observeDocument(openedWindow.document);
+    }));
+    this.register(() => {
+      styleSettingsPrecisionControls.stop();
+    });
     this.addCommand({
       callback: () => {
         nestedPropertyRendererComponent.toggleFullKeyDisplay();

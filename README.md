@@ -65,6 +65,12 @@ A copy of the vault ships with every release. You can access it via any of the f
 - **Rename or delete a nested key across the whole vault**, not just in the note you are looking at. [09 Vault-wide rename and delete](<./demo-vault/09 Vault-wide rename and delete.md>)
 - **Find them** — search nested properties the way you search anything else. [10 Search nested properties](<./demo-vault/10 Search nested properties.md>)
 - **See the full key** of a nested entry when the short name is ambiguous. [08 Full key display](<./demo-vault/08 Full key display.md>)
+- **Follow the hierarchy at a glance** with continuous static tree guides in the main Properties UI and in an optional hover breadcrumb. [11 Property field guides, breadcrumbs, and threading](<./demo-vault/11 Property field guides, breadcrumbs, and threading.md>)
+- **Navigate a field's ancestry** from a clickable, scrollable, keyboard-navigable hover breadcrumb in Live Preview, Source, or Reading mode. Each mode can be enabled independently.
+- **Thread an active property tree** by hovered field or focused cursor, with independent active-path, all-branches, root-level, main-UI, and breadcrumb controls.
+- **Style every visual detail** through the Style Settings plugin, including guide geometry, line patterns, per-depth colors, breadcrumb typography, spacing, borders, and shadows. Every numerical slider also gets a synchronized precise input.
+
+The plugin settings page is searchable. Feature-specific controls remain visible but disabled until their parent feature is enabled, so their relationships are clear without letting inactive subfeatures change runtime behavior.
 
 ## Installation
 

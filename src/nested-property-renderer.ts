@@ -268,6 +268,14 @@ export class NestedPropertyRendererComponent extends Component {
     );
   }
 
+  // eslint-disable-next-line perfectionist/sort-classes -- Kept beside the interactive toggle it synchronizes.
+  public refreshSettings(): void {
+    this.isFullKeyDisplayEnabled = this.pluginSettingsComponent.settings.isFullKeyDisplayEnabled;
+    for (const win of getAllDomWindows(this.app)) {
+      this.applyFullKeyDisplayClass(win);
+    }
+  }
+
   // Add a "Property type" submenu that lists every registered widget and persists the chosen type
   // Under `typeKey`. The `reservedKeys` guard is intentionally omitted so `tags`/`aliases`/`cssclasses`
   // Can be assigned to nested properties (Obsidian's own reserved-key handling for genuine top-level
@@ -554,7 +562,7 @@ export class NestedPropertyRendererComponent extends Component {
       this.renderNestedValue({ containerEl: nestedContainer, context, onValueChange, path, value });
       return;
     }
-    const propertyEl = containerEl.createDiv({ cls: 'metadata-property' });
+    const propertyEl = containerEl.createDiv({ attr: { 'data-path': path }, cls: 'metadata-property' });
     propertyEl.addEventListener('contextmenu', ($event) => {
       $event.stopPropagation();
       this.showNestedPropertyMenu({ $event, getValue, label, onDelete, onValueChange, path });

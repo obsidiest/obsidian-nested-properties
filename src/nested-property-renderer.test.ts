@@ -668,6 +668,18 @@ describe('NestedPropertyRenderer', () => {
       expect(win.document.body.toggleClass).toHaveBeenCalledWith(FULL_KEY_DISPLAY_BODY_CLASS, true);
     });
 
+    it('should refresh the body class after settings change', () => {
+      const win = createFakeWindow();
+      stubWindows(win);
+      loadRenderer();
+      win.document.body.toggleClass.mockClear();
+      mockPluginSettings.isFullKeyDisplayEnabled = true;
+
+      renderer.refreshSettings();
+
+      expect(win.document.body.toggleClass).toHaveBeenCalledWith(FULL_KEY_DISPLAY_BODY_CLASS, true);
+    });
+
     it('should persist the state when toggled', () => {
       const win = createFakeWindow();
       stubWindows(win);

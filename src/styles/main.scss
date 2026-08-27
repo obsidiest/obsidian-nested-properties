@@ -197,3 +197,1024 @@
     height: 10px;
   }
 }
+
+body {
+  --np-guide-color: #888888;
+  --np-guide-opacity: 0.72;
+  --np-guide-thickness: 1.5px;
+  --np-guide-dash-length: 6px;
+  --np-guide-dash-gap: 4px;
+  --np-guide-dot-length: 0.5px;
+  --np-guide-dot-gap: 4px;
+  --np-guide-connector-length: 18px;
+  --np-guide-field-gap: 4px;
+  --np-guide-first-branch-rise: 10px;
+  --np-guide-vertical-offset: 0px;
+  --np-thread-opacity: 1;
+  --np-thread-thickness: 4px;
+  --np-thread-corner-radius: 8px;
+  --np-thread-connector-length: 28px;
+  --np-thread-field-gap: 4px;
+  --np-thread-vertical-offset: 0px;
+  --np-active-field-color: #7aa2f7;
+  --np-active-field-opacity: 0.18;
+  --np-active-field-radius: 4px;
+  --np-active-field-outline-thickness: 1px;
+  --np-active-field-outline-opacity: 0.55;
+  --np-active-field-outline-offset: 1px;
+  --np-thread-color-1: #ff5a00;
+  --np-thread-color-2: #ffc400;
+  --np-thread-color-3: #a8e600;
+  --np-thread-color-4: #00c8df;
+  --np-thread-color-5: #5794ff;
+  --np-thread-color-6: #a66cff;
+  --np-thread-color-7: #e64fa3;
+  --np-thread-color-8: #cb74ff;
+  --np-thread-fallback-color-light: #777777;
+  --np-thread-fallback-color-dark: #888888;
+  --np-thread-override-color-light: #777777;
+  --np-thread-override-color-dark: #888888;
+  --np-thread-fallback-color: var(--np-thread-fallback-color-dark);
+  --np-thread-override-color: var(--np-thread-override-color-dark);
+  --np-thread-effective-color-1: var(--np-thread-color-1);
+  --np-thread-effective-color-2: var(--np-thread-color-2);
+  --np-thread-effective-color-3: var(--np-thread-color-3);
+  --np-thread-effective-color-4: var(--np-thread-color-4);
+  --np-thread-effective-color-5: var(--np-thread-color-5);
+  --np-thread-effective-color-6: var(--np-thread-color-6);
+  --np-thread-effective-color-7: var(--np-thread-color-7);
+  --np-thread-effective-color-8: var(--np-thread-color-8);
+  --np-breadcrumb-background: #202225;
+  --np-breadcrumb-border-color: #46484d;
+  --np-breadcrumb-text-color: #dcddde;
+  --np-breadcrumb-title-color: #a7a9ad;
+  --np-breadcrumb-current-color: #7aa2f7;
+  --np-breadcrumb-hover-color: #343b4a;
+  --np-breadcrumb-min-width: 220px;
+  --np-breadcrumb-max-width: 420px;
+  --np-breadcrumb-max-height: 360px;
+  --np-breadcrumb-padding: 10px;
+  --np-breadcrumb-row-gap: 2px;
+  --np-breadcrumb-indent: 18px;
+  --np-breadcrumb-connector-length: 12px;
+  --np-breadcrumb-row-padding-x: 6px;
+  --np-breadcrumb-row-padding-y: 4px;
+  --np-breadcrumb-font-size: 13px;
+  --np-breadcrumb-font-weight: 400;
+  --np-breadcrumb-line-height: 1.35;
+  --np-breadcrumb-title-size: 11px;
+  --np-breadcrumb-title-weight: 600;
+  --np-breadcrumb-title-letter-spacing: 0.03em;
+  --np-breadcrumb-title-gap: 6px;
+  --np-breadcrumb-current-background-opacity: 14;
+  --np-breadcrumb-border-thickness: 1px;
+  --np-breadcrumb-radius: 8px;
+  --np-breadcrumb-shadow-y: 4px;
+  --np-breadcrumb-shadow-blur: 18px;
+  --np-breadcrumb-shadow-opacity: 0.25;
+  --np-breadcrumb-anchor-gap: 8px;
+  --np-breadcrumb-viewport-gap: 8px;
+}
+
+body.theme-light {
+  --np-guide-color: #777777;
+  --np-active-field-color: #4c78cc;
+  --np-thread-fallback-color: var(--np-thread-fallback-color-light);
+  --np-thread-override-color: var(--np-thread-override-color-light);
+  --np-breadcrumb-background: #ffffff;
+  --np-breadcrumb-border-color: #d7d7d7;
+  --np-breadcrumb-text-color: #252525;
+  --np-breadcrumb-title-color: #666666;
+  --np-breadcrumb-current-color: #4c78cc;
+  --np-breadcrumb-hover-color: #e7edf8;
+}
+
+body:is(.np-thread-cap-round, .np-thread-cap-square, .np-thread-cap-flat):not(.np-thread-color-1-enabled) {
+  --np-thread-effective-color-1: transparent;
+}
+
+body:is(.np-thread-cap-round, .np-thread-cap-square, .np-thread-cap-flat):not(.np-thread-color-2-enabled) {
+  --np-thread-effective-color-2: transparent;
+}
+
+body:is(.np-thread-cap-round, .np-thread-cap-square, .np-thread-cap-flat):not(.np-thread-color-3-enabled) {
+  --np-thread-effective-color-3: transparent;
+}
+
+body:is(.np-thread-cap-round, .np-thread-cap-square, .np-thread-cap-flat):not(.np-thread-color-4-enabled) {
+  --np-thread-effective-color-4: transparent;
+}
+
+body:is(.np-thread-cap-round, .np-thread-cap-square, .np-thread-cap-flat):not(.np-thread-color-5-enabled) {
+  --np-thread-effective-color-5: transparent;
+}
+
+body:is(.np-thread-cap-round, .np-thread-cap-square, .np-thread-cap-flat):not(.np-thread-color-6-enabled) {
+  --np-thread-effective-color-6: transparent;
+}
+
+body:is(.np-thread-cap-round, .np-thread-cap-square, .np-thread-cap-flat):not(.np-thread-color-7-enabled) {
+  --np-thread-effective-color-7: transparent;
+}
+
+body:is(.np-thread-cap-round, .np-thread-cap-square, .np-thread-cap-flat):not(.np-thread-color-8-enabled) {
+  --np-thread-effective-color-8: transparent;
+}
+
+body.np-thread-fallback-colors-enabled {
+  &:not(.np-thread-color-1-enabled) { --np-thread-effective-color-1: var(--np-thread-fallback-color); }
+  &:not(.np-thread-color-2-enabled) { --np-thread-effective-color-2: var(--np-thread-fallback-color); }
+  &:not(.np-thread-color-3-enabled) { --np-thread-effective-color-3: var(--np-thread-fallback-color); }
+  &:not(.np-thread-color-4-enabled) { --np-thread-effective-color-4: var(--np-thread-fallback-color); }
+  &:not(.np-thread-color-5-enabled) { --np-thread-effective-color-5: var(--np-thread-fallback-color); }
+  &:not(.np-thread-color-6-enabled) { --np-thread-effective-color-6: var(--np-thread-fallback-color); }
+  &:not(.np-thread-color-7-enabled) { --np-thread-effective-color-7: var(--np-thread-fallback-color); }
+  &:not(.np-thread-color-8-enabled) { --np-thread-effective-color-8: var(--np-thread-fallback-color); }
+}
+
+body.np-thread-override-colors-enabled {
+  --np-thread-effective-color-1: var(--np-thread-override-color);
+  --np-thread-effective-color-2: var(--np-thread-override-color);
+  --np-thread-effective-color-3: var(--np-thread-override-color);
+  --np-thread-effective-color-4: var(--np-thread-override-color);
+  --np-thread-effective-color-5: var(--np-thread-override-color);
+  --np-thread-effective-color-6: var(--np-thread-override-color);
+  --np-thread-effective-color-7: var(--np-thread-override-color);
+  --np-thread-effective-color-8: var(--np-thread-override-color);
+}
+
+.metadata-container {
+  position: relative;
+}
+
+.np-property-tree-overlay {
+  position: absolute;
+  inset: 0 auto auto 0;
+  z-index: 2;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.np-property-guide {
+  fill: none;
+  vector-effect: non-scaling-stroke;
+}
+
+.np-property-guide-static,
+.np-property-guide-breadcrumb {
+  stroke: var(--np-guide-color);
+  stroke-width: var(--np-guide-thickness);
+  stroke-opacity: var(--np-guide-opacity);
+  stroke-linecap: round;
+}
+
+.np-guide-line-dashed :is(.np-property-guide-static, .np-property-guide-breadcrumb) {
+  stroke-dasharray: var(--np-guide-dash-length) var(--np-guide-dash-gap);
+}
+
+.np-guide-line-dotted :is(.np-property-guide-static, .np-property-guide-breadcrumb) {
+  stroke-dasharray: var(--np-guide-dot-length) var(--np-guide-dot-gap);
+}
+
+:is(.np-property-thread-active, .np-property-thread-all, .np-property-thread-root-active, .np-property-thread-root-all) {
+  stroke-width: var(--np-thread-thickness);
+  stroke-opacity: var(--np-thread-opacity);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.np-thread-cap-square :is(.np-property-thread-active, .np-property-thread-all, .np-property-thread-root-active, .np-property-thread-root-all) {
+  stroke-linecap: square;
+}
+
+.np-thread-cap-flat :is(.np-property-thread-active, .np-property-thread-all, .np-property-thread-root-active, .np-property-thread-root-all) {
+  stroke-linecap: butt;
+}
+
+.np-property-thread-depth-1 { stroke: var(--np-thread-effective-color-1); }
+.np-property-thread-depth-2 { stroke: var(--np-thread-effective-color-2); }
+.np-property-thread-depth-3 { stroke: var(--np-thread-effective-color-3); }
+.np-property-thread-depth-4 { stroke: var(--np-thread-effective-color-4); }
+.np-property-thread-depth-5 { stroke: var(--np-thread-effective-color-5); }
+.np-property-thread-depth-6 { stroke: var(--np-thread-effective-color-6); }
+.np-property-thread-depth-7 { stroke: var(--np-thread-effective-color-7); }
+.np-property-thread-depth-8 { stroke: var(--np-thread-effective-color-8); }
+
+.np-property-field-active,
+.np-property-field-popover-highlight {
+  border-radius: var(--np-active-field-radius);
+  background: color-mix(in srgb, var(--np-active-field-color) calc(var(--np-active-field-opacity) * 100%), transparent);
+  outline: var(--np-active-field-outline-thickness) solid color-mix(in srgb, var(--np-active-field-color) calc(var(--np-active-field-outline-opacity) * 100%), transparent);
+  outline-offset: var(--np-active-field-outline-offset);
+}
+
+.np-property-field-source-highlight {
+  border-radius: var(--np-active-field-radius);
+  background: color-mix(in srgb, var(--np-active-field-color) calc(var(--np-active-field-opacity) * 100%), transparent);
+  outline: var(--np-active-field-outline-thickness) solid color-mix(in srgb, var(--np-active-field-color) calc(var(--np-active-field-outline-opacity) * 100%), transparent);
+  outline-offset: var(--np-active-field-outline-offset);
+}
+
+.np-property-breadcrumb-popover {
+  position: fixed;
+  z-index: var(--layer-popover, 1000);
+  min-width: var(--np-breadcrumb-min-width);
+  max-width: min(var(--np-breadcrumb-max-width), calc(100vw - var(--np-breadcrumb-viewport-gap) - var(--np-breadcrumb-viewport-gap)));
+  max-height: min(var(--np-breadcrumb-max-height), calc(100vh - var(--np-breadcrumb-viewport-gap) - var(--np-breadcrumb-viewport-gap)));
+  padding: var(--np-breadcrumb-padding);
+  overflow: hidden;
+  color: var(--np-breadcrumb-text-color);
+  background: var(--np-breadcrumb-background);
+  border: var(--np-breadcrumb-border-thickness) solid var(--np-breadcrumb-border-color);
+  border-radius: var(--np-breadcrumb-radius);
+  box-shadow: 0 var(--np-breadcrumb-shadow-y) var(--np-breadcrumb-shadow-blur) rgba(0, 0, 0, var(--np-breadcrumb-shadow-opacity));
+}
+
+.np-property-breadcrumb-title {
+  margin-bottom: var(--np-breadcrumb-title-gap);
+  color: var(--np-breadcrumb-title-color);
+  font-size: var(--np-breadcrumb-title-size);
+  font-weight: var(--np-breadcrumb-title-weight);
+  letter-spacing: var(--np-breadcrumb-title-letter-spacing);
+}
+
+.np-breadcrumb-title-uppercase .np-property-breadcrumb-title {
+  text-transform: uppercase;
+}
+
+.np-property-breadcrumb-tree {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--np-breadcrumb-row-gap);
+  max-height: calc(var(--np-breadcrumb-max-height) - 2 * var(--np-breadcrumb-padding) - var(--np-breadcrumb-title-size) - var(--np-breadcrumb-title-gap));
+  overflow: auto;
+  scrollbar-gutter: stable;
+}
+
+.np-property-breadcrumb-guides {
+  position: absolute;
+  inset: 0 auto auto 0;
+  z-index: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.np-property-breadcrumb-row {
+  position: relative;
+  z-index: 1;
+  border-radius: calc(var(--np-breadcrumb-radius) / 2);
+
+  &.is-current {
+    background: color-mix(in srgb, var(--np-breadcrumb-current-color) calc(var(--np-breadcrumb-current-background-opacity) * 1%), transparent);
+  }
+
+  &.is-current .np-property-breadcrumb-key {
+    color: var(--np-breadcrumb-current-color);
+  }
+}
+
+.np-property-breadcrumb-key {
+  display: block;
+  width: 100%;
+  padding-block: var(--np-breadcrumb-row-padding-y);
+  padding-inline-end: var(--np-breadcrumb-row-padding-x);
+  padding-inline-start: calc(var(--np-breadcrumb-row-padding-x) + var(--np-breadcrumb-connector-length) + var(--np-breadcrumb-depth) * var(--np-breadcrumb-indent));
+  color: inherit;
+  font-family: inherit;
+  font-size: var(--np-breadcrumb-font-size);
+  font-weight: var(--np-breadcrumb-font-weight);
+  line-height: var(--np-breadcrumb-line-height);
+  text-align: start;
+  overflow-wrap: anywhere;
+  background: transparent;
+  border: 0;
+  border-radius: inherit;
+  box-shadow: none;
+  cursor: var(--cursor-link);
+
+  &:hover,
+  &:focus-visible {
+    color: var(--np-breadcrumb-current-color);
+    background: var(--np-breadcrumb-hover-color);
+    outline: var(--np-active-field-outline-thickness) solid color-mix(in srgb, var(--np-breadcrumb-current-color) calc(var(--np-active-field-outline-opacity) * 100%), transparent);
+    outline-offset: var(--np-active-field-outline-offset);
+  }
+}
+
+.np-style-settings-number-input {
+  width: 6.5em;
+  min-width: 5em;
+  margin-inline-start: 6px;
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+}
+
+.np-style-settings-color-input {
+  width: 32px;
+  height: 24px;
+  padding: 1px;
+  margin-inline-end: 6px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  background: transparent;
+}
+/* @settings
+# @preserve
+
+name: Nested Properties
+id: nested-properties
+settings:
+  -
+    id: np-guide-appearance
+    title: Property Static Tree Indentation Guide Appearance
+    type: heading
+    level: 2
+  -
+    id: np-guide-color
+    title: Guide color
+    description: Color of property-tree vertical spines and horizontal connectors
+    type: variable-themed-color
+    format: hex
+    opacity: false
+    default-light: '#777777'
+    default-dark: '#888888'
+  -
+    id: np-guide-opacity
+    title: Guide opacity
+    type: variable-number-slider
+    default: 0.72
+    min: 0.05
+    max: 1
+    step: 0.05
+  -
+    id: np-guide-thickness
+    title: Guide thickness
+    type: variable-number-slider
+    default: 1.5
+    min: 0.5
+    max: 6
+    step: 0.1
+    format: px
+  -
+    id: np-guide-pattern
+    title: Guide pattern
+    type: class-select
+    allowEmpty: false
+    default: np-guide-line-solid
+    options:
+      -
+        label: Solid
+        value: np-guide-line-solid
+      -
+        label: Dashed
+        value: np-guide-line-dashed
+      -
+        label: Dotted
+        value: np-guide-line-dotted
+  -
+    id: np-guide-dash-length
+    title: Dashed-line dash length
+    type: variable-number-slider
+    default: 6
+    min: 0.5
+    max: 24
+    step: 0.5
+    format: px
+  -
+    id: np-guide-dash-gap
+    title: Dashed-line gap
+    type: variable-number-slider
+    default: 4
+    min: 0.5
+    max: 24
+    step: 0.5
+    format: px
+  -
+    id: np-guide-dot-length
+    title: Dotted-line dot length
+    description: Length of each dot when the guide pattern is Dotted
+    type: variable-number-slider
+    default: 0.5
+    min: 0.1
+    max: 6
+    step: 0.1
+    format: px
+  -
+    id: np-guide-dot-gap
+    title: Dotted-line gap
+    type: variable-number-slider
+    default: 4
+    min: 0.5
+    max: 24
+    step: 0.5
+    format: px
+  -
+    id: np-guide-geometry
+    title: Property guide geometry
+    type: heading
+    level: 3
+    collapsed: true
+  -
+    id: np-guide-connector-length
+    title: Horizontal connector length
+    type: variable-number-slider
+    default: 18
+    min: 4
+    max: 64
+    step: 1
+    format: px
+  -
+    id: np-guide-first-branch-rise
+    title: First-branch vertical rise
+    type: variable-number-slider
+    default: 10
+    min: 0
+    max: 40
+    step: 1
+    format: px
+  -
+    id: np-guide-field-gap
+    title: Gap before property field
+    description: Empty distance between a static connector and its property key
+    type: variable-number-slider
+    default: 4
+    min: 0
+    max: 24
+    step: 0.5
+    format: px
+  -
+    id: np-guide-vertical-offset
+    title: Connector vertical offset
+    type: variable-number-slider
+    default: 0
+    min: -12
+    max: 12
+    step: 0.5
+    format: px
+  -
+    id: np-thread-appearance
+    title: Property Field Thread Appearance
+    type: heading
+    level: 2
+  -
+    id: np-thread-opacity
+    title: Thread opacity
+    type: variable-number-slider
+    default: 1
+    min: 0.05
+    max: 1
+    step: 0.05
+  -
+    id: np-thread-thickness
+    title: Thread thickness
+    type: variable-number-slider
+    default: 4
+    min: 0.5
+    max: 12
+    step: 0.1
+    format: px
+  -
+    id: np-thread-corner-radius
+    title: Thread corner radius
+    type: variable-number-slider
+    default: 8
+    min: 0
+    max: 32
+    step: 0.5
+    format: px
+  -
+    id: np-thread-line-cap
+    title: Thread line cap
+    type: class-select
+    allowEmpty: false
+    default: np-thread-cap-round
+    options:
+      -
+        label: Round
+        value: np-thread-cap-round
+      -
+        label: Square
+        value: np-thread-cap-square
+      -
+        label: Flat
+        value: np-thread-cap-flat
+  -
+    id: np-thread-geometry
+    title: Property field thread geometry
+    type: heading
+    level: 3
+    collapsed: true
+  -
+    id: np-thread-connector-length
+    title: Thread connector length
+    type: variable-number-slider
+    default: 28
+    min: 4
+    max: 96
+    step: 1
+    format: px
+  -
+    id: np-thread-field-gap
+    title: Thread gap before property field
+    description: Empty distance between threading and its property key
+    type: variable-number-slider
+    default: 4
+    min: 0
+    max: 32
+    step: 0.5
+    format: px
+  -
+    id: np-thread-vertical-offset
+    title: Thread vertical offset
+    description: Moves thread elbows up or down relative to property fields
+    type: variable-number-slider
+    default: 0
+    min: -16
+    max: 16
+    step: 0.5
+    format: px
+  -
+    id: np-active-field-highlight
+    title: Active Property Field Highlight
+    type: heading
+    level: 3
+    collapsed: true
+  -
+    id: np-active-field-color
+    title: Active field color
+    type: variable-themed-color
+    format: hex
+    opacity: false
+    default-light: '#4c78cc'
+    default-dark: '#7aa2f7'
+  -
+    id: np-active-field-opacity
+    title: Active field highlight opacity
+    type: variable-number-slider
+    default: 0.18
+    min: 0
+    max: 1
+    step: 0.01
+  -
+    id: np-active-field-radius
+    title: Active field highlight radius
+    type: variable-number-slider
+    default: 4
+    min: 0
+    max: 20
+    step: 0.5
+    format: px
+  -
+    id: np-active-field-outline-thickness
+    title: Active field outline thickness
+    type: variable-number-slider
+    default: 1
+    min: 0
+    max: 8
+    step: 0.25
+    format: px
+  -
+    id: np-active-field-outline-opacity
+    title: Active field outline opacity
+    type: variable-number-slider
+    default: 0.55
+    min: 0
+    max: 1
+    step: 0.01
+  -
+    id: np-active-field-outline-offset
+    title: Active field outline offset
+    type: variable-number-slider
+    default: 1
+    min: -4
+    max: 12
+    step: 0.25
+    format: px
+  -
+    id: np-thread-colors
+    title: Property Field Thread Colors
+    type: heading
+    level: 3
+    collapsed: true
+  -
+    id: np-thread-fallback-colors-enabled
+    title: Global Fallback Property Field Thread Colors
+    description: Use the fallback color whenever an individual depth color is disabled
+    type: class-toggle
+    default: true
+  -
+    id: np-thread-fallback-color-light
+    title: Global fallback thread color (light mode)
+    type: variable-text
+    default: '#777777'
+  -
+    id: np-thread-fallback-color-dark
+    title: Global fallback thread color (dark mode)
+    type: variable-text
+    default: '#888888'
+  -
+    id: np-thread-override-colors-enabled
+    title: Global Override Property Field Thread Colors
+    description: Override every depth color
+    type: class-toggle
+    default: false
+  -
+    id: np-thread-override-color-light
+    title: Global override thread color (light mode)
+    type: variable-text
+    default: '#777777'
+  -
+    id: np-thread-override-color-dark
+    title: Global override thread color (dark mode)
+    type: variable-text
+    default: '#888888'
+  -
+    id: np-thread-color-1-enabled
+    title: Enable thread color 1
+    type: class-toggle
+    default: true
+  -
+    id: np-thread-color-1
+    title: Thread color 1
+    type: variable-themed-color
+    format: hex
+    opacity: false
+    default-light: '#d94f00'
+    default-dark: '#ff5a00'
+  -
+    id: np-thread-color-2-enabled
+    title: Enable thread color 2
+    type: class-toggle
+    default: true
+  -
+    id: np-thread-color-2
+    title: Thread color 2
+    type: variable-themed-color
+    format: hex
+    opacity: false
+    default-light: '#c99a00'
+    default-dark: '#ffc400'
+  -
+    id: np-thread-color-3-enabled
+    title: Enable thread color 3
+    type: class-toggle
+    default: true
+  -
+    id: np-thread-color-3
+    title: Thread color 3
+    type: variable-themed-color
+    format: hex
+    opacity: false
+    default-light: '#79b800'
+    default-dark: '#a8e600'
+  -
+    id: np-thread-color-4-enabled
+    title: Enable thread color 4
+    type: class-toggle
+    default: true
+  -
+    id: np-thread-color-4
+    title: Thread color 4
+    type: variable-themed-color
+    format: hex
+    opacity: false
+    default-light: '#008ea1'
+    default-dark: '#00c8df'
+  -
+    id: np-thread-color-5-enabled
+    title: Enable thread color 5
+    type: class-toggle
+    default: true
+  -
+    id: np-thread-color-5
+    title: Thread color 5
+    type: variable-themed-color
+    format: hex
+    opacity: false
+    default-light: '#396fc8'
+    default-dark: '#5794ff'
+  -
+    id: np-thread-color-6-enabled
+    title: Enable thread color 6
+    type: class-toggle
+    default: true
+  -
+    id: np-thread-color-6
+    title: Thread color 6
+    type: variable-themed-color
+    format: hex
+    opacity: false
+    default-light: '#7046bf'
+    default-dark: '#a66cff'
+  -
+    id: np-thread-color-7-enabled
+    title: Enable thread color 7
+    type: class-toggle
+    default: true
+  -
+    id: np-thread-color-7
+    title: Thread color 7
+    type: variable-themed-color
+    format: hex
+    opacity: false
+    default-light: '#b33478'
+    default-dark: '#e64fa3'
+  -
+    id: np-thread-color-8-enabled
+    title: Enable thread color 8+
+    type: class-toggle
+    default: true
+  -
+    id: np-thread-color-8
+    title: Thread color 8+
+    description: Highlight color for the eighth and every deeper property-tree edge
+    type: variable-themed-color
+    format: hex
+    opacity: false
+    default-light: '#8d4cb8'
+    default-dark: '#cb74ff'
+  -
+    id: np-breadcrumb-appearance
+    title: Property Field Hover Breadcrumb Appearance
+    type: heading
+    level: 2
+  -
+    id: np-breadcrumb-background
+    title: Breadcrumb background
+    type: variable-themed-color
+    format: hex
+    opacity: false
+    default-light: '#ffffff'
+    default-dark: '#202225'
+  -
+    id: np-breadcrumb-border-color
+    title: Breadcrumb border color
+    type: variable-themed-color
+    format: hex
+    opacity: false
+    default-light: '#d7d7d7'
+    default-dark: '#46484d'
+  -
+    id: np-breadcrumb-text-color
+    title: Breadcrumb text color
+    type: variable-themed-color
+    format: hex
+    opacity: false
+    default-light: '#252525'
+    default-dark: '#dcddde'
+  -
+    id: np-breadcrumb-title-color
+    title: Breadcrumb title color
+    type: variable-themed-color
+    format: hex
+    opacity: false
+    default-light: '#666666'
+    default-dark: '#a7a9ad'
+  -
+    id: np-breadcrumb-current-color
+    title: Current field color
+    type: variable-themed-color
+    format: hex
+    opacity: false
+    default-light: '#4c78cc'
+    default-dark: '#7aa2f7'
+  -
+    id: np-breadcrumb-hover-color
+    title: Hovered field color
+    type: variable-themed-color
+    format: hex
+    opacity: false
+    default-light: '#e7edf8'
+    default-dark: '#343b4a'
+  -
+    id: np-breadcrumb-geometry
+    title: Breadcrumb Geometry and Typography
+    type: heading
+    level: 3
+    collapsed: true
+  -
+    id: np-breadcrumb-min-width
+    title: Minimum width
+    type: variable-number-slider
+    default: 220
+    min: 120
+    max: 640
+    step: 1
+    format: px
+  -
+    id: np-breadcrumb-max-width
+    title: Maximum width
+    type: variable-number-slider
+    default: 420
+    min: 180
+    max: 960
+    step: 1
+    format: px
+  -
+    id: np-breadcrumb-max-height
+    title: Maximum height
+    type: variable-number-slider
+    default: 360
+    min: 100
+    max: 800
+    step: 1
+    format: px
+  -
+    id: np-breadcrumb-padding
+    title: Panel padding
+    type: variable-number-slider
+    default: 10
+    min: 0
+    max: 40
+    step: 0.5
+    format: px
+  -
+    id: np-breadcrumb-row-gap
+    title: Row gap
+    type: variable-number-slider
+    default: 2
+    min: 0
+    max: 16
+    step: 0.5
+    format: px
+  -
+    id: np-breadcrumb-indent
+    title: Tree indentation
+    type: variable-number-slider
+    default: 18
+    min: 8
+    max: 48
+    step: 1
+    format: px
+  -
+    id: np-breadcrumb-connector-length
+    title: Tree connector length
+    type: variable-number-slider
+    default: 12
+    min: 4
+    max: 36
+    step: 1
+    format: px
+  -
+    id: np-breadcrumb-row-padding-x
+    title: Row horizontal padding
+    type: variable-number-slider
+    default: 6
+    min: 0
+    max: 24
+    step: 0.5
+    format: px
+  -
+    id: np-breadcrumb-row-padding-y
+    title: Row vertical padding
+    type: variable-number-slider
+    default: 4
+    min: 0
+    max: 20
+    step: 0.5
+    format: px
+  -
+    id: np-breadcrumb-font-size
+    title: Field font size
+    type: variable-number-slider
+    default: 13
+    min: 8
+    max: 28
+    step: 0.25
+    format: px
+  -
+    id: np-breadcrumb-font-weight
+    title: Field font weight
+    type: variable-number-slider
+    default: 400
+    min: 100
+    max: 900
+    step: 1
+  -
+    id: np-breadcrumb-line-height
+    title: Field line height
+    type: variable-number-slider
+    default: 1.35
+    min: 0.8
+    max: 3
+    step: 0.05
+  -
+    id: np-breadcrumb-title-size
+    title: Title font size
+    type: variable-number-slider
+    default: 11
+    min: 8
+    max: 24
+    step: 0.25
+    format: px
+  -
+    id: np-breadcrumb-title-weight
+    title: Title font weight
+    type: variable-number-slider
+    default: 600
+    min: 100
+    max: 900
+    step: 1
+  -
+    id: np-breadcrumb-title-letter-spacing
+    title: Title letter spacing
+    type: variable-number-slider
+    default: 0.03
+    min: -0.1
+    max: 0.5
+    step: 0.01
+    format: em
+  -
+    id: np-breadcrumb-title-case
+    title: Title letter case
+    type: class-select
+    allowEmpty: false
+    default: np-breadcrumb-title-uppercase
+    options:
+      -
+        label: Normal
+        value: np-breadcrumb-title-normal
+      -
+        label: Uppercase
+        value: np-breadcrumb-title-uppercase
+  -
+    id: np-breadcrumb-title-gap
+    title: Gap below title
+    type: variable-number-slider
+    default: 6
+    min: 0
+    max: 24
+    step: 0.5
+    format: px
+  -
+    id: np-breadcrumb-current-background-opacity
+    title: Current field background opacity
+    type: variable-number-slider
+    default: 14
+    min: 0
+    max: 100
+    step: 1
+  -
+    id: np-breadcrumb-border-thickness
+    title: Border thickness
+    type: variable-number-slider
+    default: 1
+    min: 0
+    max: 8
+    step: 0.25
+    format: px
+  -
+    id: np-breadcrumb-radius
+    title: Panel corner radius
+    type: variable-number-slider
+    default: 8
+    min: 0
+    max: 32
+    step: 0.5
+    format: px
+  -
+    id: np-breadcrumb-shadow-y
+    title: Shadow vertical offset
+    type: variable-number-slider
+    default: 4
+    min: -12
+    max: 24
+    step: 0.5
+    format: px
+  -
+    id: np-breadcrumb-shadow-blur
+    title: Shadow blur
+    type: variable-number-slider
+    default: 18
+    min: 0
+    max: 64
+    step: 0.5
+    format: px
+  -
+    id: np-breadcrumb-shadow-opacity
+    title: Shadow opacity
+    type: variable-number-slider
+    default: 0.25
+    min: 0
+    max: 1
+    step: 0.01
+  -
+    id: np-breadcrumb-anchor-gap
+    title: Gap from hovered property field
+    type: variable-number-slider
+    default: 8
+    min: 0
+    max: 48
+    step: 0.5
+    format: px
+  -
+    id: np-breadcrumb-viewport-gap
+    title: Minimum gap from viewport edges
+    type: variable-number-slider
+    default: 8
+    min: 0
+    max: 48
+    step: 0.5
+    format: px
+*/
