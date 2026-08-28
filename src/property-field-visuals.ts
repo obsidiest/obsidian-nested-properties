@@ -1,5 +1,5 @@
 /* v8 ignore file -- Integration behavior depends on Obsidian's live metadata-editor and CodeMirror DOM. */
-/* eslint-disable @typescript-eslint/array-type, @typescript-eslint/no-confusing-void-expression, @typescript-eslint/no-non-null-assertion, @typescript-eslint/no-unnecessary-condition, @typescript-eslint/restrict-template-expressions, complexity, import-x/consistent-type-specifier-style, no-magic-numbers, no-restricted-syntax, obsidian-dev-utils/params-options-name-match, obsidian-dev-utils/readonly-params-options-result-members, perfectionist/sort-classes, perfectionist/sort-modules, perfectionist/sort-union-types, unicorn/consistent-boolean-name, unicorn/no-array-callback-reference, unicorn/no-nested-ternary, unicorn/no-unnecessary-nested-ternary, unicorn/prefer-add-event-listener-options, unicorn/prefer-spread -- The component mirrors and traverses Obsidian's cross-window DOM; local callback and ordering rules would obscure the event-flow implementation. */
+/* eslint-disable @typescript-eslint/array-type, @typescript-eslint/no-confusing-void-expression, @typescript-eslint/no-non-null-assertion, @typescript-eslint/no-unnecessary-condition, @typescript-eslint/restrict-template-expressions, complexity, import-x/consistent-type-specifier-style, no-magic-numbers, no-restricted-syntax, obsidian-dev-utils/params-options-name-match, obsidian-dev-utils/readonly-params-options-result-members, perfectionist/sort-classes, perfectionist/sort-modules, perfectionist/sort-union-types, unicorn/consistent-boolean-name, unicorn/no-array-callback-reference, unicorn/no-nested-ternary, unicorn/no-unnecessary-nested-ternary, unicorn/prefer-spread -- The component mirrors and traverses Obsidian's cross-window DOM; local callback and ordering rules would obscure the event-flow implementation. */
 import type { App } from 'obsidian';
 
 import {
@@ -22,6 +22,8 @@ import {
 
 const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
 const POPOVER_HIDE_DELAY_IN_MILLISECONDS = 120;
+const OWNED_VISUAL_SELECTOR = '.np-property-tree-overlay, .np-property-breadcrumb-popover';
+const METADATA_CONTAINER_SELECTOR = '.metadata-container';
 
 type ViewMode = 'live-preview' | 'reading' | 'source';
 
@@ -65,6 +67,14 @@ interface PropertyFieldVisualsComponentParams {
 interface Point {
   x: number;
   y: number;
+}
+
+interface VisualMutation {
+  addedNodes: Iterable<Node>;
+  attributeName: string | null;
+  oldValue: string | null;
+  removedNodes: Iterable<Node>;
+  target: Node;
 }
 
 export class PropertyFieldVisualsComponent extends Component {
@@ -162,32 +172,35 @@ export class PropertyFieldVisualsComponent extends Component {
     this.listen(ownerDocument, state, 'pointerout', (event) => this.onPointerOut(ownerDocument, event));
     this.listen(ownerDocument, state, 'focusin', (event) => this.onFocusIn(ownerDocument, event));
     this.listen(ownerDocument, state, 'focusout', (event) => this.onFocusOut(ownerDocument, event));
-    this.listen(ownerDocument, state, 'input', () => this.scheduleRender(ownerDocument));
-    this.listen(ownerDocument, state, 'change', () => this.scheduleRender(ownerDocument));
+    this.listen(ownerDocument, state, 'input', (event) => this.onPropertyEditorChanged(ownerDocument, event));
+    this.listen(ownerDocument, state, 'change', (event) => this.onPropertyEditorChanged(ownerDocument, event));
     this.listen(ownerDocument, state, 'keyup', () => this.onEditorCursorChanged(ownerDocument));
     this.listen(ownerDocument, state, 'mouseup', () => this.onEditorCursorChanged(ownerDocument));
     const win = ownerDocument.defaultView;
     if (win !== null) {
       const schedule = (): void => this.scheduleRender(ownerDocument);
       win.addEventListener('resize', schedule);
-      ownerDocument.addEventListener('scroll', schedule, true);
       state.cleanups.push(() => {
         win.removeEventListener('resize', schedule);
-        ownerDocument.removeEventListener('scroll', schedule, true);
       });
     }
 
     const Observer = ownerDocument.defaultView?.MutationObserver;
     if (Observer !== undefined) {
       state.mutationObserver = new Observer((mutations) => {
-        if (mutations.some(isRelevantMutation)) {
+        // CodeMirror continuously replaces unrelated Live Preview nodes. Only metadata-editor
+        // Structure changes can invalidate an overlay's measured property geometry.
+        if (mutations.some(isPropertyFieldMutation)) {
           this.scheduleRender(ownerDocument);
         }
       });
       state.mutationObserver.observe(ownerDocument.body, { childList: true, subtree: true });
-      state.bodyStyleObserver = new Observer(() => this.scheduleRender(ownerDocument));
-      state.bodyStyleObserver.observe(ownerDocument.body, { attributeFilter: ['class', 'style'], attributes: true });
-      state.bodyStyleObserver.observe(ownerDocument.documentElement, { attributeFilter: ['class', 'style'], attributes: true });
+      state.bodyStyleObserver = new Observer((mutations) => {
+        if (mutations.some(isPropertyVisualStyleMutation)) {
+          this.scheduleRender(ownerDocument);
+        }
+      });
+      state.bodyStyleObserver.observe(ownerDocument.body, { attributeFilter: ['class', 'style'], attributeOldValue: true, attributes: true });
     }
     this.scheduleRender(ownerDocument);
   }
@@ -215,16 +228,21 @@ export class PropertyFieldVisualsComponent extends Component {
     const propertyElement = fieldTarget?.closest<HTMLElement>('.metadata-property') ?? null;
     const metadataContainer = propertyElement?.closest<HTMLElement>('.metadata-container') ?? null;
     if (propertyElement !== null && metadataContainer !== null) {
+      const mode = detectViewMode(propertyElement);
+      const isBreadcrumbEnabled = this.isBreadcrumbEnabled(mode);
+      const isHoverThreadingEnabled = this.isMainThreadingEnabled() && !this.pluginSettingsComponent.settings.isActiveCursorPropertyFieldThreadingEnabled;
+      if (!isBreadcrumbEnabled && !isHoverThreadingEnabled) {
+        return;
+      }
       const roots = buildPropertyFieldForest(metadataContainer);
       const node = flattenPropertyFieldForest(roots).find((candidate) => candidate.element === propertyElement);
       if (node === undefined) {
         return;
       }
-      const mode = detectViewMode(propertyElement);
-      if (this.isBreadcrumbEnabled(mode)) {
+      if (isBreadcrumbEnabled) {
         this.showDomBreadcrumb(ownerDocument, roots, node, fieldTarget ?? propertyElement);
       }
-      if (this.isMainThreadingEnabled() && !this.pluginSettingsComponent.settings.isActiveCursorPropertyFieldThreadingEnabled) {
+      if (isHoverThreadingEnabled) {
         state.active = { container: metadataContainer, element: propertyElement, kind: 'dom' };
         this.scheduleRender(ownerDocument);
       }
@@ -235,14 +253,19 @@ export class PropertyFieldVisualsComponent extends Component {
     if (sourceLine === null || detectViewMode(sourceLine) !== 'source') {
       return;
     }
+    const isBreadcrumbEnabled = this.isBreadcrumbEnabled('source');
+    const isHoverThreadingEnabled = this.pluginSettingsComponent.settings.isPropertyFieldThreadingEnabled && !this.pluginSettingsComponent.settings.isActiveCursorPropertyFieldThreadingEnabled;
+    if (!isBreadcrumbEnabled && !isHoverThreadingEnabled) {
+      return;
+    }
     const sourceTarget = this.resolveSourceTarget(sourceLine);
     if (sourceTarget === null) {
       return;
     }
-    if (this.isBreadcrumbEnabled('source')) {
+    if (isBreadcrumbEnabled) {
       this.showSourceBreadcrumb(ownerDocument, sourceTarget.roots, sourceTarget.node, sourceLine, sourceTarget.view);
     }
-    if (this.pluginSettingsComponent.settings.isPropertyFieldThreadingEnabled && !this.pluginSettingsComponent.settings.isActiveCursorPropertyFieldThreadingEnabled) {
+    if (isHoverThreadingEnabled) {
       state.active = { kind: 'source', line: sourceTarget.node.line, roots: sourceTarget.roots, view: sourceTarget.view };
       this.highlightSourceLine(ownerDocument, sourceLine);
     }
@@ -257,17 +280,28 @@ export class PropertyFieldVisualsComponent extends Component {
     if (related instanceof ownerDocument.defaultView!.Node && (target.contains(related) || (related.instanceOf(ownerDocument.defaultView!.Element) && related.closest('.np-property-breadcrumb-popover') !== null))) {
       return;
     }
-    if (target.closest('.metadata-property-key, .metadata-property-value, .cm-line, .np-property-breadcrumb-popover') !== null) {
+    if (target.closest('.metadata-property-key, .metadata-property-value, .cm-line, .np-property-breadcrumb-popover') === null) {
+      return;
+    }
+    const state = this.documentStates.get(ownerDocument);
+    if (state?.popover !== null && state?.popover !== undefined) {
       this.schedulePopoverHide(ownerDocument);
-      if (!this.pluginSettingsComponent.settings.isActiveCursorPropertyFieldThreadingEnabled) {
-        const state = this.documentStates.get(ownerDocument);
-        if (state !== undefined) {
-          state.active = null;
-          state.sourceHighlight?.classList.remove('np-property-field-source-highlight');
-          state.sourceHighlight = null;
-          this.scheduleRender(ownerDocument);
-        }
+    }
+    if (!this.pluginSettingsComponent.settings.isActiveCursorPropertyFieldThreadingEnabled && state?.active !== null && state?.active !== undefined) {
+      const shouldRender = state.active.kind === 'dom';
+      state.active = null;
+      state.sourceHighlight?.classList.remove('np-property-field-source-highlight');
+      state.sourceHighlight = null;
+      if (shouldRender) {
+        this.scheduleRender(ownerDocument);
       }
+    }
+  }
+
+  private onPropertyEditorChanged(ownerDocument: Document, event: Event): void {
+    const target = event.target;
+    if (target instanceof ownerDocument.defaultView!.Element && target.closest(METADATA_CONTAINER_SELECTOR) !== null) {
+      this.scheduleRender(ownerDocument);
     }
   }
 
@@ -362,8 +396,13 @@ export class PropertyFieldVisualsComponent extends Component {
     const roots = buildPropertyFieldForest(container);
     const nodes = flattenPropertyFieldForest(roots);
     for (const node of nodes) {
-      node.element.classList.add('np-property-tree-node');
-      node.element.style.setProperty('--np-property-depth', String(node.depth));
+      if (!node.element.classList.contains('np-property-tree-node')) {
+        node.element.classList.add('np-property-tree-node');
+      }
+      const depth = String(node.depth);
+      if (node.element.style.getPropertyValue('--np-property-depth') !== depth) {
+        node.element.style.setProperty('--np-property-depth', depth);
+      }
     }
     const settings = this.pluginSettingsComponent.settings;
     const showStatic = settings.isNestedPropertiesMainUiStaticTreeIndentationGuidesEnabled;
@@ -690,7 +729,7 @@ export class PropertyFieldVisualsComponent extends Component {
   private schedulePopoverHide(ownerDocument: Document): void {
     const state = this.documentStates.get(ownerDocument);
     const win = ownerDocument.defaultView;
-    if (state === undefined || win === null) {
+    if (state === undefined || win === null || state.popover === null) {
       return;
     }
     this.cancelPopoverHide(ownerDocument);
@@ -846,13 +885,57 @@ function detectViewMode(element: Element): ViewMode {
   return sourceView?.classList.contains('is-live-preview') === true ? 'live-preview' : sourceView === null ? 'live-preview' : 'source';
 }
 
-function isRelevantMutation(mutation: MutationRecord): boolean {
-  const target = mutation.target.instanceOf(Element) ? mutation.target : mutation.target.parentElement;
-  if (target?.closest('.np-property-tree-overlay, .np-property-breadcrumb-popover') !== null) {
+export function isPropertyFieldMutation(mutation: VisualMutation): boolean {
+  const target = asElement(mutation.target);
+  if (target?.closest(OWNED_VISUAL_SELECTOR) !== null) {
     return false;
   }
   const changed = [...mutation.addedNodes, ...mutation.removedNodes];
-  return changed.some((node) => !(node.instanceOf(Element)) || !node.matches('.np-property-tree-overlay, .np-property-breadcrumb-popover'));
+  const externalChanges = changed.filter((node) => !isOwnedVisualNode(node));
+  if (changed.length > 0 && externalChanges.length === 0) {
+    return false;
+  }
+  if (target?.closest(METADATA_CONTAINER_SELECTOR) !== null) {
+    return true;
+  }
+  return externalChanges.some(touchesMetadataContainer);
+}
+
+export function isPropertyVisualStyleMutation(mutation: VisualMutation): boolean {
+  if (mutation.attributeName !== 'class' && mutation.attributeName !== 'style') {
+    return false;
+  }
+  const target = asElement(mutation.target);
+  if (target === null) {
+    return false;
+  }
+  const currentValue = target.getAttribute(mutation.attributeName) ?? '';
+  return getRelevantStyleAttributePart(mutation.attributeName, mutation.oldValue ?? '') !== getRelevantStyleAttributePart(mutation.attributeName, currentValue);
+}
+
+function asElement(node: Node): Element | null {
+  return node.nodeType === node.ELEMENT_NODE ? node as Element : node.parentElement;
+}
+
+function getRelevantStyleAttributePart(attributeName: 'class' | 'style', value: string): string {
+  const separator = attributeName === 'class' ? /\s+/u : ';';
+  const prefix = attributeName === 'class' ? 'np-' : '--np-';
+  return value
+    .split(separator)
+    .map((part) => part.trim())
+    .filter((part) => part.startsWith(prefix))
+    .sort()
+    .join(';');
+}
+
+function isOwnedVisualNode(node: Node): boolean {
+  const element = asElement(node);
+  return element?.matches(OWNED_VISUAL_SELECTOR) === true || element?.closest(OWNED_VISUAL_SELECTOR) !== null;
+}
+
+function touchesMetadataContainer(node: Node): boolean {
+  const element = asElement(node);
+  return element?.matches(METADATA_CONTAINER_SELECTOR) === true || element?.closest(METADATA_CONTAINER_SELECTOR) !== null || element?.querySelector(METADATA_CONTAINER_SELECTOR) !== null;
 }
 
 function readCssNumber(element: Element, variable: string, fallback: number): number {
@@ -887,4 +970,4 @@ function resolveSourceLine(lineElement: HTMLElement, source: string, preferredLi
   return candidates.sort((left, right) => Math.abs(left - preferredLine) - Math.abs(right - preferredLine))[0] ?? preferredLine;
 }
 
-/* eslint-enable @typescript-eslint/array-type, @typescript-eslint/no-confusing-void-expression, @typescript-eslint/no-non-null-assertion, @typescript-eslint/no-unnecessary-condition, @typescript-eslint/restrict-template-expressions, complexity, import-x/consistent-type-specifier-style, no-magic-numbers, no-restricted-syntax, obsidian-dev-utils/params-options-name-match, obsidian-dev-utils/readonly-params-options-result-members, perfectionist/sort-classes, perfectionist/sort-modules, perfectionist/sort-union-types, unicorn/consistent-boolean-name, unicorn/no-array-callback-reference, unicorn/no-nested-ternary, unicorn/no-unnecessary-nested-ternary, unicorn/prefer-add-event-listener-options, unicorn/prefer-spread -- Restore repository DOM rules. */
+/* eslint-enable @typescript-eslint/array-type, @typescript-eslint/no-confusing-void-expression, @typescript-eslint/no-non-null-assertion, @typescript-eslint/no-unnecessary-condition, @typescript-eslint/restrict-template-expressions, complexity, import-x/consistent-type-specifier-style, no-magic-numbers, no-restricted-syntax, obsidian-dev-utils/params-options-name-match, obsidian-dev-utils/readonly-params-options-result-members, perfectionist/sort-classes, perfectionist/sort-modules, perfectionist/sort-union-types, unicorn/consistent-boolean-name, unicorn/no-array-callback-reference, unicorn/no-nested-ternary, unicorn/no-unnecessary-nested-ternary, unicorn/prefer-spread -- Restore repository DOM rules. */

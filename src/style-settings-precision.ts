@@ -32,8 +32,9 @@ export class StyleSettingsPrecisionControls {
       return;
     }
     const observer = new Observer((mutations) => {
-      if (mutations.some((mutation) => mutation.type === 'childList' || mutation.attributeName === 'data-id')) {
-        enhanceStyleSettingsControls(ownerDocument);
+      // The settings view is usually closed, so never scan the document again for unrelated editor mutations.
+      for (const root of getStyleSettingsMutationRoots(mutations)) {
+        enhanceStyleSettingsControls(root);
       }
     });
     observer.observe(ownerDocument.body, { attributeFilter: ['data-id'], attributes: true, childList: true, subtree: true });
@@ -197,6 +198,32 @@ export function parseCompleteInRangeNumber(value: string, minimumValue: string, 
   return rawValue;
 }
 
+export function getStyleSettingsMutationRoots(mutations: MutationRecord[]): ParentNode[] {
+  const roots = new Set<ParentNode>();
+  for (const mutation of mutations) {
+    const context = findStyleSettingsContext(mutation.target);
+    if (context !== null && (mutation.type === 'childList' || mutation.attributeName === 'data-id')) {
+      roots.add(context);
+    }
+    if (mutation.type !== 'childList') {
+      continue;
+    }
+    for (const node of mutation.addedNodes) {
+      if (node.nodeType !== node.ELEMENT_NODE) {
+        continue;
+      }
+      const element = node as Element;
+      const addedContext = findStyleSettingsContext(element);
+      if (addedContext !== null) {
+        roots.add(addedContext);
+      } else if (element.matches(MARKER_SELECTOR) || element.matches(SECTION_SELECTOR) || element.querySelector(`${MARKER_SELECTOR}, ${SECTION_SELECTOR}`) !== null) {
+        roots.add(element);
+      }
+    }
+  }
+  return [...roots];
+}
+
 function enhanceStyleSettingsControls(root: ParentNode): void {
   enhanceStyleSettingsNumberControls(root);
   enhanceStyleSettingsColorControls(root);
@@ -232,6 +259,22 @@ function findRows(root: ParentNode, controlSelector: string): Element[] {
     }
   }
   return [...rows];
+}
+
+function findStyleSettingsContext(node: Node): Element | null {
+  const element = node.nodeType === node.ELEMENT_NODE ? node as Element : node.parentElement;
+  if (element === null) {
+    return null;
+  }
+  const row = element.closest('.setting-item');
+  if (row !== null && (row.matches(MARKER_SELECTOR) || row.querySelector(MARKER_SELECTOR) !== null)) {
+    return row;
+  }
+  const container = element.closest('.style-settings-container');
+  if (container?.previousElementSibling?.matches(SECTION_SELECTOR) === true) {
+    return container;
+  }
+  return element.matches(MARKER_SELECTOR) || element.matches(SECTION_SELECTOR) ? element : null;
 }
 
 function parseFiniteNumber(value: string): null | number {

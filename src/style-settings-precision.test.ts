@@ -1,3 +1,4 @@
+import { noopAsync } from 'obsidian-dev-utils/function';
 import {
   describe,
   expect,
@@ -9,7 +10,8 @@ import {
   enhanceStyleSettingsColorControls,
   enhanceStyleSettingsNumberControls,
   normalizeHexColor,
-  parseCompleteInRangeNumber
+  parseCompleteInRangeNumber,
+  StyleSettingsPrecisionControls
 } from './style-settings-precision.ts';
 
 function createStyleSettingRow(id: string, control: HTMLInputElement): HTMLElement {
@@ -104,6 +106,32 @@ describe('Style Settings precision controls', () => {
 
     expect(textInput.value).toBe('#123456');
     expect(changeListener).toHaveBeenCalledTimes(1);
+    row.remove();
+  });
+
+  it('should enhance dynamically added plugin settings without repeatedly scanning unrelated Live Preview changes', async () => {
+    const controls = new StyleSettingsPrecisionControls();
+    const queryAllSpy = vi.spyOn(document, 'querySelectorAll');
+    controls.start([document]);
+    queryAllSpy.mockClear();
+
+    const editor = document.body.createDiv({ cls: 'cm-content' });
+    editor.createDiv({ cls: 'cm-line', text: 'Live Preview changed' });
+    await noopAsync();
+    expect(queryAllSpy).not.toHaveBeenCalled();
+
+    const slider = document.body.createEl('input');
+    slider.type = 'range';
+    slider.min = '0';
+    slider.max = '10';
+    const row = createStyleSettingRow('np-guide-thickness', slider);
+    document.body.append(row);
+    await noopAsync();
+    expect(row.querySelector('.np-style-settings-number-input')).not.toBeNull();
+
+    controls.stop();
+    queryAllSpy.mockRestore();
+    editor.remove();
     row.remove();
   });
 });
