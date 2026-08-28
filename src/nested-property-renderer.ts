@@ -26,6 +26,7 @@ import { MetadataTypeManagerGetTypeInfoPatchComponent } from './patches/metadata
 import { MultiTextPropertyWidgetPatchComponent } from './patches/multi-text-property-widget-patch-component.ts';
 import { UnknownWidgetRenderPatchComponent } from './patches/unknown-widget-render-patch-component.ts';
 import { PluginSettingsComponent } from './plugin-settings-component.ts';
+import { dispatchPropertyFieldLayoutChange } from './property-field-events.ts';
 import { TypeChangeModal } from './type-change-modal.ts';
 import {
   convertValue,
@@ -437,6 +438,7 @@ export class NestedPropertyRendererComponent extends Component {
           } else {
             this.expandedPaths.delete(rootPath);
           }
+          dispatchPropertyFieldLayoutChange(propertyEl);
           this.floatingScrollbar?.update();
         });
       }
@@ -540,6 +542,7 @@ export class NestedPropertyRendererComponent extends Component {
         } else {
           this.expandedPaths.delete(path);
         }
+        dispatchPropertyFieldLayoutChange(propertyEl);
       });
 
       const complexWidget = this.getWidget({ label, path, value });
@@ -739,8 +742,8 @@ export class NestedPropertyRendererComponent extends Component {
   }
 }
 
-function collapseAllIn(parentNode: ParentNode, expandedPaths: Set<string>): void {
-  for (const el of parentNode.querySelectorAll<HTMLElement>(':scope .nested-properties-collapsible')) {
+function collapseAllIn(collapsibles: Iterable<HTMLElement>, expandedPaths: Set<string>): void {
+  for (const el of collapsibles) {
     el.classList.add('is-collapsed');
     const path = el.dataset['path'];
     if (path) {
@@ -757,11 +760,12 @@ function createSummary(params: CreateSummaryParams): void {
     $event.preventDefault();
     propertyEl.classList.remove('is-collapsed');
     expandedPaths.add(path);
+    dispatchPropertyFieldLayoutChange(propertyEl);
   });
 }
 
-function expandAllIn(parentNode: ParentNode, expandedPaths: Set<string>): void {
-  for (const el of parentNode.querySelectorAll<HTMLElement>(':scope .nested-properties-collapsible')) {
+function expandAllIn(collapsibles: Iterable<HTMLElement>, expandedPaths: Set<string>): void {
+  for (const el of collapsibles) {
     el.classList.remove('is-collapsed');
     const path = el.dataset['path'];
     if (path) {
@@ -814,14 +818,15 @@ function injectHeaderButtons(params: InjectHeaderButtonsParams): void {
   toggleButton.addEventListener('click', ($event) => {
     $event.stopPropagation();
     $event.preventDefault();
-    const allCollapsibles = metadataContainerEl.querySelectorAll('.nested-properties-collapsible');
+    const allCollapsibles = metadataContainerEl.querySelectorAll<HTMLElement>('.nested-properties-collapsible');
     const isAllCollapsed = allCollapsibles.length > 0 && [...allCollapsibles].every((el) => el.classList.contains('is-collapsed'));
     if (isAllCollapsed) {
-      expandAllIn(metadataContainerEl, expandedPaths);
+      expandAllIn(allCollapsibles, expandedPaths);
     } else {
-      collapseAllIn(metadataContainerEl, expandedPaths);
+      collapseAllIn(allCollapsibles, expandedPaths);
     }
-    updateToggleButton({ metadataContainerEl, toggleButton });
+    setToggleButtonState(toggleButton, !isAllCollapsed);
+    dispatchPropertyFieldLayoutChange(metadataContainerEl);
   });
 
   const fullKeyToggleButton = actionsEl.createDiv({ cls: 'clickable-icon nested-properties-full-key-toggle' });
@@ -909,6 +914,12 @@ function renderAddPropertyButton(params: RenderAddPropertyButtonParams): void {
   });
 }
 
+function setToggleButtonState(toggleButton: HTMLElement, isAllCollapsed: boolean): void {
+  toggleButton.setAttribute('aria-label', isAllCollapsed ? 'Expand all nested properties' : 'Collapse all nested properties');
+  toggleButton.empty();
+  setIcon(toggleButton, isAllCollapsed ? 'chevrons-up-down' : 'chevrons-down-up');
+}
+
 function sizeTopLevelKeyInputs(metadataContainerEl: HTMLElement): void {
   // Size the native key input of every top-level property to its content so the full-key-display
   // Toggle (`width: auto`) can expand it. Obsidian renders plain scalar properties itself, so unlike
@@ -927,7 +938,5 @@ function updateToggleButton(params: UpdateToggleButtonParams): void {
   const allCollapsibles = metadataContainerEl.querySelectorAll('.nested-properties-collapsible');
   const isAllCollapsed = allCollapsibles.length > 0 && [...allCollapsibles].every((el) => el.classList.contains('is-collapsed'));
 
-  toggleButton.setAttribute('aria-label', isAllCollapsed ? 'Expand all nested properties' : 'Collapse all nested properties');
-  toggleButton.empty();
-  setIcon(toggleButton, isAllCollapsed ? 'chevrons-up-down' : 'chevrons-down-up');
+  setToggleButtonState(toggleButton, isAllCollapsed);
 }

@@ -15,7 +15,7 @@ import {
 } from './style-settings-precision.ts';
 
 function createStyleSettingRow(id: string, control: HTMLInputElement): HTMLElement {
-  const row = document.body.createDiv();
+  const row = createDiv();
   row.className = 'setting-item';
   row.dataset['id'] = id;
   const name = row.createDiv();
@@ -113,7 +113,7 @@ describe('Style Settings precision controls', () => {
     const controls = new StyleSettingsPrecisionControls();
     const queryAllSpy = vi.spyOn(document, 'querySelectorAll');
     controls.start([document]);
-    queryAllSpy.mockClear();
+    expect(queryAllSpy).not.toHaveBeenCalled();
 
     const editor = document.body.createDiv({ cls: 'cm-content' });
     editor.createDiv({ cls: 'cm-line', text: 'Live Preview changed' });
@@ -125,13 +125,45 @@ describe('Style Settings precision controls', () => {
     slider.min = '0';
     slider.max = '10';
     const row = createStyleSettingRow('np-guide-thickness', slider);
-    document.body.append(row);
+    const heading = createDiv();
+    heading.className = 'style-settings-heading';
+    heading.dataset['id'] = 'nested-properties';
+    const container = createDiv();
+    container.className = 'style-settings-container';
+    container.append(row);
+    document.body.append(heading, container);
     await noopAsync();
     expect(row.querySelector('.np-style-settings-number-input')).not.toBeNull();
+    expect(queryAllSpy).not.toHaveBeenCalled();
 
     controls.stop();
     queryAllSpy.mockRestore();
     editor.remove();
-    row.remove();
+    heading.remove();
+    container.remove();
+  });
+
+  it('should enhance an already open namespaced plugin section without scanning the document', () => {
+    const slider = createEl('input');
+    slider.type = 'range';
+    const row = createStyleSettingRow('nested-properties@@np-guide-thickness', slider);
+    const heading = createDiv();
+    heading.className = 'style-settings-heading';
+    heading.dataset['id'] = 'community@@nested-properties';
+    const container = createDiv();
+    container.className = 'style-settings-container';
+    container.append(row);
+    document.body.append(heading, container);
+    const queryAllSpy = vi.spyOn(document, 'querySelectorAll');
+    const controls = new StyleSettingsPrecisionControls();
+
+    controls.start([document]);
+
+    expect(row.querySelector('.np-style-settings-number-input')).not.toBeNull();
+    expect(queryAllSpy).not.toHaveBeenCalled();
+    controls.stop();
+    queryAllSpy.mockRestore();
+    heading.remove();
+    container.remove();
   });
 });

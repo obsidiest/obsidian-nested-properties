@@ -55,8 +55,9 @@ export class Plugin extends PluginBase {
     );
 
     const styleSettingsPrecisionControls = new StyleSettingsPrecisionControls();
-    styleSettingsPrecisionControls.start([...getAllDomWindows(this.app)].map((win) => win.document));
-    this.app.workspace.trigger('parse-style-settings');
+    this.app.workspace.onLayoutReady(() => {
+      styleSettingsPrecisionControls.start([...getAllDomWindows(this.app)].map((win) => win.document));
+    });
     this.registerEvent(this.app.workspace.on('window-open', (_workspaceWindow, openedWindow) => {
       styleSettingsPrecisionControls.observeDocument(openedWindow.document);
     }));

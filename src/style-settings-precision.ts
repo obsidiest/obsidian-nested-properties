@@ -26,13 +26,18 @@ export class StyleSettingsPrecisionControls {
     if (ownerDocument?.body === null || ownerDocument?.body === undefined || this.observers.has(ownerDocument)) {
       return;
     }
-    enhanceStyleSettingsControls(ownerDocument);
+    enhanceOpenStyleSettingsControls(ownerDocument);
     const Observer = ownerDocument.defaultView?.MutationObserver;
     if (Observer === undefined) {
       return;
     }
     const observer = new Observer((mutations) => {
-      // The settings view is usually closed, so never scan the document again for unrelated editor mutations.
+      // Live Preview can replace thousands of unrelated nodes while the settings view is closed. A
+      // Class-name lookup is substantially cheaper than running compound selectors through every
+      // Added editor subtree, and it also tells us when the plugin's Style Settings section exists.
+      if (!hasOpenStyleSettingsSection(ownerDocument)) {
+        return;
+      }
       for (const root of getStyleSettingsMutationRoots(mutations)) {
         enhanceStyleSettingsControls(root);
       }
@@ -47,6 +52,28 @@ export class StyleSettingsPrecisionControls {
     }
     this.observers.clear();
   }
+}
+
+function enhanceOpenStyleSettingsControls(ownerDocument: Document): void {
+  for (const heading of getOpenStyleSettingsHeadings(ownerDocument)) {
+    enhanceStyleSettingsControls(heading);
+    const container = heading.nextElementSibling;
+    if (container?.matches('.style-settings-container') === true) {
+      enhanceStyleSettingsControls(container);
+    }
+  }
+}
+
+function getOpenStyleSettingsHeadings(ownerDocument: Document): Element[] {
+  // eslint-disable-next-line unicorn/prefer-query-selector -- This startup/hot-path guard intentionally uses the browser's class-name index instead of running the selector engine across the Obsidian workspace.
+  return Array.from(ownerDocument.getElementsByClassName('style-settings-heading')).filter((heading) => {
+    const id = heading.getAttribute('data-id') ?? '';
+    return id === 'nested-properties' || id.endsWith('@@nested-properties');
+  });
+}
+
+function hasOpenStyleSettingsSection(ownerDocument: Document): boolean {
+  return getOpenStyleSettingsHeadings(ownerDocument).length > 0;
 }
 
 export function enhanceStyleSettingsNumberControls(root: ParentNode): number {

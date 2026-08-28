@@ -345,5 +345,14 @@ describe('Plugin', () => {
       stopCleanup?.();
       expect(lifecycleMocks.stop).toHaveBeenCalledTimes(1);
     });
+
+    it('should not force a synchronous global Style Settings reparse during startup', async () => {
+      const plugin = new Plugin(app, manifest);
+      const triggerSpy = vi.spyOn(app.workspace, 'trigger');
+
+      await plugin.onload();
+
+      expect(triggerSpy.mock.calls.some((call) => call[0] === 'parse-style-settings')).toBe(false);
+    });
   });
 });

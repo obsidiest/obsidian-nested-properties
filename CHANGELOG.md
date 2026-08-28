@@ -2,7 +2,10 @@
 
 ## 1.5.0
 
-- fix: isolate property visuals and Style Settings observers from unrelated Live Preview DOM churn to prevent runaway CPU usage and editor lag
+- fix: render property visuals only after layout readiness and only for shown metadata editors, reusing unchanged tab renders and invalidating only the editor that changed
+- fix: build guide overlays off-DOM, prune collapsed descendants, cache computed Style Settings values, and batch expand/collapse-all redraws
+- fix: keep Style Settings precision controls dormant while their section is closed and remove the synchronous whole-workspace Style Settings parse during startup
+- fix: isolate property visuals and Style Settings observers from unrelated Live Preview DOM churn
 - fix: mirror fresh production `main.js` and `styles.css` artifacts to the repository root for flat-layout local deployment scripts
 - feat: add searchable settings for property hover breadcrumbs, static tree guides, and property-field threading
 - feat: add clickable, keyboard-navigable property ancestry breadcrumbs in Live Preview, Source, and Reading modes

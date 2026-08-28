@@ -9,6 +9,7 @@ import {
 import { getAllDomWindows } from 'obsidian-dev-utils/obsidian/workspace';
 
 import { PluginSettingsComponent } from './plugin-settings-component.ts';
+import { PROPERTY_FIELD_LAYOUT_CHANGE_EVENT } from './property-field-events.ts';
 import {
   buildPropertyFieldForest,
   findSourcePropertyNodeAtLine,
@@ -56,7 +57,15 @@ interface DocumentState {
   mutationObserver: MutationObserver | null;
   popover: HTMLElement | null;
   renderFrame: number | null;
+  renderGeneration: number;
   sourceHighlight: HTMLElement | null;
+}
+
+export interface ContainerRenderSnapshot {
+  activeElement: HTMLElement | null;
+  generation: number;
+  height: number;
+  width: number;
 }
 
 interface PropertyFieldVisualsComponentParams {
@@ -69,6 +78,8 @@ interface Point {
   y: number;
 }
 
+export type CssNumberReader = (variable: string, fallback: number) => number;
+
 interface VisualMutation {
   addedNodes: Iterable<Node>;
   attributeName: string | null;
@@ -79,6 +90,7 @@ interface VisualMutation {
 
 export class PropertyFieldVisualsComponent extends Component {
   private readonly app: App;
+  private readonly containerRenderSnapshots = new WeakMap<HTMLElement, ContainerRenderSnapshot>();
   private readonly documentStates = new Map<Document, DocumentState>();
   private readonly pluginSettingsComponent: PluginSettingsComponent;
 
@@ -90,15 +102,31 @@ export class PropertyFieldVisualsComponent extends Component {
 
   public override onload(): void {
     super.onload();
-    this.observeAllDocuments();
-    this.registerEvent(this.app.workspace.on('layout-change', () => {
-      this.observeAllDocuments();
-      this.refresh();
+    this.registerEvent(this.app.workspace.on('active-leaf-change', (leaf) => {
+      if (!this.app.workspace.layoutReady) {
+        return;
+      }
+      const ownerDocument = leaf?.view.containerEl.ownerDocument;
+      if (ownerDocument === undefined) {
+        return;
+      }
+      this.observeDocument(ownerDocument);
+      for (const state of this.documentStates.values()) {
+        if (state.active?.kind !== 'dom' || state.active.container.isShown()) {
+          continue;
+        }
+        state.active.element.querySelector('.np-property-field-active')?.classList.remove('np-property-field-active');
+        state.active = null;
+      }
+      this.scheduleRender(ownerDocument);
     }));
     this.registerEvent(this.app.workspace.on('css-change', () => this.refresh()));
     this.registerEvent(this.app.workspace.on('window-open', (_workspaceWindow, openedWindow) => {
+      if (!this.app.workspace.layoutReady) {
+        return;
+      }
       this.observeDocument(openedWindow.document);
-      this.scheduleRender(openedWindow.document);
+      this.invalidateDocument(openedWindow.document);
     }));
     this.app.workspace.onLayoutReady(() => {
       this.observeAllDocuments();
@@ -125,6 +153,9 @@ export class PropertyFieldVisualsComponent extends Component {
   }
 
   public refresh(): void {
+    if (!this.app.workspace.layoutReady) {
+      return;
+    }
     this.observeAllDocuments();
     for (const [ownerDocument, state] of this.documentStates) {
       if (!this.isMainThreadingEnabled()) {
@@ -135,7 +166,7 @@ export class PropertyFieldVisualsComponent extends Component {
       state.popover?.remove();
       state.popover = null;
       this.applyBodyClasses(ownerDocument);
-      this.scheduleRender(ownerDocument);
+      this.invalidateDocument(ownerDocument);
     }
   }
 
@@ -163,6 +194,7 @@ export class PropertyFieldVisualsComponent extends Component {
       mutationObserver: null,
       popover: null,
       renderFrame: null,
+      renderGeneration: 0,
       sourceHighlight: null
     };
     this.documentStates.set(ownerDocument, state);
@@ -176,12 +208,23 @@ export class PropertyFieldVisualsComponent extends Component {
     this.listen(ownerDocument, state, 'change', (event) => this.onPropertyEditorChanged(ownerDocument, event));
     this.listen(ownerDocument, state, 'keyup', () => this.onEditorCursorChanged(ownerDocument));
     this.listen(ownerDocument, state, 'mouseup', () => this.onEditorCursorChanged(ownerDocument));
+    const layoutChangeListener = (event: Event): void => {
+      const target = event.target;
+      const container = target instanceof ownerDocument.defaultView!.Node ? asElement(target)?.closest<HTMLElement>(METADATA_CONTAINER_SELECTOR) ?? null : null;
+      if (container === null) {
+        this.invalidateDocument(ownerDocument);
+      } else {
+        this.invalidateContainer(container);
+      }
+    };
+    ownerDocument.addEventListener(PROPERTY_FIELD_LAYOUT_CHANGE_EVENT, layoutChangeListener);
+    state.cleanups.push(() => ownerDocument.removeEventListener(PROPERTY_FIELD_LAYOUT_CHANGE_EVENT, layoutChangeListener));
     const win = ownerDocument.defaultView;
     if (win !== null) {
-      const schedule = (): void => this.scheduleRender(ownerDocument);
-      win.addEventListener('resize', schedule);
+      const invalidate = (): void => this.invalidateDocument(ownerDocument);
+      win.addEventListener('resize', invalidate);
       state.cleanups.push(() => {
-        win.removeEventListener('resize', schedule);
+        win.removeEventListener('resize', invalidate);
       });
     }
 
@@ -190,19 +233,42 @@ export class PropertyFieldVisualsComponent extends Component {
       state.mutationObserver = new Observer((mutations) => {
         // CodeMirror continuously replaces unrelated Live Preview nodes. Only metadata-editor
         // Structure changes can invalidate an overlay's measured property geometry.
-        if (mutations.some(isPropertyFieldMutation)) {
+        let shouldRender = false;
+        for (const mutation of mutations) {
+          if (!isPropertyFieldMutation(mutation)) {
+            continue;
+          }
+          shouldRender = true;
+          for (const container of getPropertyFieldMutationContainers(mutation)) {
+            this.containerRenderSnapshots.delete(container);
+          }
+        }
+        if (shouldRender) {
           this.scheduleRender(ownerDocument);
         }
       });
       state.mutationObserver.observe(ownerDocument.body, { childList: true, subtree: true });
       state.bodyStyleObserver = new Observer((mutations) => {
         if (mutations.some(isPropertyVisualStyleMutation)) {
-          this.scheduleRender(ownerDocument);
+          this.invalidateDocument(ownerDocument);
         }
       });
       state.bodyStyleObserver.observe(ownerDocument.body, { attributeFilter: ['class', 'style'], attributeOldValue: true, attributes: true });
     }
+  }
+
+  private invalidateDocument(ownerDocument: Document): void {
+    const state = this.documentStates.get(ownerDocument);
+    if (state === undefined) {
+      return;
+    }
+    state.renderGeneration += 1;
     this.scheduleRender(ownerDocument);
+  }
+
+  private invalidateContainer(container: HTMLElement): void {
+    this.containerRenderSnapshots.delete(container);
+    this.scheduleRender(container.ownerDocument);
   }
 
   private listen<K extends keyof DocumentEventMap>(ownerDocument: Document, state: DocumentState, type: K, listener: (event: DocumentEventMap[K]) => void): void {
@@ -300,8 +366,11 @@ export class PropertyFieldVisualsComponent extends Component {
 
   private onPropertyEditorChanged(ownerDocument: Document, event: Event): void {
     const target = event.target;
-    if (target instanceof ownerDocument.defaultView!.Element && target.closest(METADATA_CONTAINER_SELECTOR) !== null) {
-      this.scheduleRender(ownerDocument);
+    if (target instanceof ownerDocument.defaultView!.Element) {
+      const container = target.closest<HTMLElement>(METADATA_CONTAINER_SELECTOR);
+      if (container !== null) {
+        this.invalidateContainer(container);
+      }
     }
   }
 
@@ -363,7 +432,7 @@ export class PropertyFieldVisualsComponent extends Component {
   private scheduleRender(ownerDocument: Document): void {
     const state = this.documentStates.get(ownerDocument);
     const win = ownerDocument.defaultView;
-    if (state === undefined || win === null || state.renderFrame !== null) {
+    if (!this.app.workspace.layoutReady || state === undefined || win === null || state.renderFrame !== null) {
       return;
     }
     state.renderFrame = win.requestAnimationFrame(() => {
@@ -377,24 +446,32 @@ export class PropertyFieldVisualsComponent extends Component {
     if (state === undefined) {
       return;
     }
-    const containers = Array.from(ownerDocument.querySelectorAll<HTMLElement>('.metadata-container'));
-    for (const container of containers) {
-      this.renderContainer(container, state.active?.kind === 'dom' && state.active.container === container ? state.active : null);
-    }
-    for (const overlay of ownerDocument.querySelectorAll<HTMLElement>('.np-property-tree-overlay')) {
-      if (!containers.includes(overlay.parentElement as HTMLElement)) {
-        overlay.remove();
+    for (const container of getShownMetadataContainers(ownerDocument)) {
+      const active = state.active?.kind === 'dom' && state.active.container === container ? state.active : null;
+      const activeElement = active?.element ?? null;
+      const width = Math.max(container.scrollWidth, container.clientWidth);
+      const height = Math.max(container.scrollHeight, container.clientHeight);
+      const snapshot = this.containerRenderSnapshots.get(container);
+      if (isContainerRenderCurrent(snapshot, state.renderGeneration, width, height, activeElement)) {
+        continue;
       }
+      this.renderContainer(container, active, width, height);
+      this.containerRenderSnapshots.set(container, {
+        activeElement,
+        generation: state.renderGeneration,
+        height,
+        width
+      });
     }
   }
 
-  private renderContainer(container: HTMLElement, active: ActiveDomField | null): void {
-    container.querySelector(':scope > .np-property-tree-overlay')?.remove();
+  private renderContainer(container: HTMLElement, active: ActiveDomField | null, width: number, height: number): void {
+    const existingOverlay = container.querySelector(':scope > .np-property-tree-overlay');
     for (const element of container.querySelectorAll<HTMLElement>('.np-property-field-active')) {
       element.classList.remove('np-property-field-active');
     }
     const roots = buildPropertyFieldForest(container);
-    const nodes = flattenPropertyFieldForest(roots);
+    const nodes = flattenVisiblePropertyFieldForest(roots);
     for (const node of nodes) {
       if (!node.element.classList.contains('np-property-tree-node')) {
         node.element.classList.add('np-property-tree-node');
@@ -408,61 +485,73 @@ export class PropertyFieldVisualsComponent extends Component {
     const showStatic = settings.isNestedPropertiesMainUiStaticTreeIndentationGuidesEnabled;
     const showThreads = active !== null && this.isMainThreadingEnabled();
     if (nodes.length === 0 || (!showStatic && !showThreads)) {
+      existingOverlay?.remove();
       return;
     }
 
     const svg = container.ownerDocument.createElementNS(SVG_NAMESPACE, 'svg');
     svg.classList.add('np-property-tree-overlay');
     svg.setAttribute('aria-hidden', 'true');
-    svg.setAttribute('width', String(Math.max(container.scrollWidth, container.clientWidth)));
-    svg.setAttribute('height', String(Math.max(container.scrollHeight, container.clientHeight)));
-    container.prepend(svg);
+    svg.setAttribute('width', String(width));
+    svg.setAttribute('height', String(height));
+    function commitOverlay(): void {
+      if (existingOverlay === null) {
+        container.prepend(svg);
+      } else {
+        existingOverlay.replaceWith(svg);
+      }
+    }
     const metrics = createNodeMetrics(container, nodes);
+    const readNumber = createCssNumberReader(container);
     if (showStatic) {
-      this.drawForest(svg, roots, metrics, 'np-property-guide-static');
+      this.drawForest(svg, roots, metrics, 'np-property-guide-static', readNumber);
     }
     if (!showThreads || active === null) {
+      commitOverlay();
       return;
     }
     const activeNode = nodes.find((node) => node.element === active.element);
     if (activeNode === undefined) {
+      commitOverlay();
       return;
     }
     activeNode.keyElement.classList.add('np-property-field-active');
     const activeRoot = getPropertyFieldRoot(activeNode);
 
     if (settings.isAllBranchesOfActiveRootLevelPropertyFieldTreeThreadingEnabled && settings.isAllBranchesOfActiveRootLevelPropertyFieldTreeThreadingInMainUiEnabled && settings.isActiveRootLevelPropertyFieldTreeThreadingEnabled) {
-      this.drawForest(svg, roots, metrics, 'np-property-thread-root-all');
+      this.drawForest(svg, roots, metrics, 'np-property-thread-root-all', readNumber);
     } else if (settings.isAllBranchesOfActivePropertyFieldTreeThreadingEnabled && settings.isAllBranchesOfActivePropertyFieldTreeThreadingInMainUiEnabled) {
-      this.drawForest(svg, [activeRoot], metrics, 'np-property-thread-all');
+      this.drawForest(svg, [activeRoot], metrics, 'np-property-thread-all', readNumber);
     }
 
     if (settings.isActiveRootLevelPropertyFieldTreeThreadingEnabled && settings.isActiveRootLevelPropertyFieldThreadingEnabled && settings.isActiveRootLevelPropertyFieldThreadingInMainUiEnabled) {
-      this.drawRootPath(svg, roots, activeRoot, metrics);
+      this.drawRootPath(svg, roots, activeRoot, metrics, readNumber);
     }
     if (settings.isActivePropertyFieldThreadingEnabled && settings.isActivePropertyFieldThreadingInMainUiEnabled) {
-      this.drawActivePath(svg, activeNode, metrics);
+      this.drawActivePath(svg, activeNode, metrics, readNumber);
     }
+    commitOverlay();
   }
 
-  private drawForest<T extends { children: T[]; depth: number }>(svg: SVGSVGElement, roots: T[], metrics: Map<T, Point>, className: string): void {
+  private drawForest<T extends { children: T[]; depth: number }>(svg: SVGSVGElement, roots: T[], metrics: Map<T, Point>, className: string, readNumber: CssNumberReader): void {
     const visit = (siblings: T[]): void => {
-      if (siblings.length === 0) {
+      const visibleSiblings = siblings.filter((sibling) => metrics.has(sibling));
+      if (visibleSiblings.length === 0) {
         return;
       }
-      this.drawSiblingGroup(svg, siblings, metrics, className);
-      for (const sibling of siblings) {
+      this.drawSiblingGroup(svg, visibleSiblings, metrics, className, readNumber);
+      for (const sibling of visibleSiblings) {
         visit(sibling.children);
       }
     };
     visit(roots);
   }
 
-  private drawSiblingGroup<T extends { depth: number }>(svg: SVGSVGElement, siblings: T[], metrics: Map<T, Point>, className: string): void {
+  private drawSiblingGroup<T extends { depth: number }>(svg: SVGSVGElement, siblings: T[], metrics: Map<T, Point>, className: string, readNumber: CssNumberReader): void {
     const isThread = className.startsWith('np-property-thread-');
     const isBreadcrumb = svg.classList.contains('np-property-breadcrumb-guides');
-    const fieldGap = readCssNumber(svg, isThread ? '--np-thread-field-gap' : '--np-guide-field-gap', 4);
-    const verticalOffset = readCssNumber(svg, isThread ? '--np-thread-vertical-offset' : '--np-guide-vertical-offset', 0);
+    const fieldGap = readNumber(isThread ? '--np-thread-field-gap' : '--np-guide-field-gap', 4);
+    const verticalOffset = readNumber(isThread ? '--np-thread-vertical-offset' : '--np-guide-vertical-offset', 0);
     const points = siblings
       .map((node) => metrics.get(node))
       .filter((point): point is Point => point !== undefined)
@@ -470,8 +559,8 @@ export class PropertyFieldVisualsComponent extends Component {
     if (points.length === 0) {
       return;
     }
-    const connectorLength = readCssNumber(svg, isBreadcrumb ? '--np-breadcrumb-connector-length' : isThread ? '--np-thread-connector-length' : '--np-guide-connector-length', 18);
-    const firstRise = readCssNumber(svg, '--np-guide-first-branch-rise', 10);
+    const connectorLength = readNumber(isBreadcrumb ? '--np-breadcrumb-connector-length' : isThread ? '--np-thread-connector-length' : '--np-guide-connector-length', 18);
+    const firstRise = readNumber('--np-guide-first-branch-rise', 10);
     const spineX = Math.min(...points.map((point) => point.x)) - connectorLength;
     const firstY = points[0]?.y ?? 0;
     const lastY = points.at(-1)?.y ?? firstY;
@@ -481,12 +570,12 @@ export class PropertyFieldVisualsComponent extends Component {
     }
   }
 
-  private drawActivePath(svg: SVGSVGElement, activeNode: PropertyFieldNode, metrics: Map<PropertyFieldNode, Point>): void {
+  private drawActivePath(svg: SVGSVGElement, activeNode: PropertyFieldNode, metrics: Map<PropertyFieldNode, Point>, readNumber: CssNumberReader): void {
     const ancestors = getPropertyFieldAncestors(activeNode);
-    const connectorLength = readCssNumber(svg, '--np-thread-connector-length', 28);
-    const fieldGap = readCssNumber(svg, '--np-thread-field-gap', 4);
-    const radius = readCssNumber(svg, '--np-thread-corner-radius', 8);
-    const verticalOffset = readCssNumber(svg, '--np-thread-vertical-offset', 0);
+    const connectorLength = readNumber('--np-thread-connector-length', 28);
+    const fieldGap = readNumber('--np-thread-field-gap', 4);
+    const radius = readNumber('--np-thread-corner-radius', 8);
+    const verticalOffset = readNumber('--np-thread-vertical-offset', 0);
     for (const [index, node] of ancestors.entries()) {
       const rawPoint = metrics.get(node);
       if (rawPoint === undefined) {
@@ -497,21 +586,21 @@ export class PropertyFieldVisualsComponent extends Component {
       const rawParentPoint = parent === null ? null : metrics.get(parent) ?? null;
       const parentPoint = rawParentPoint === null ? null : { x: rawParentPoint.x - fieldGap, y: rawParentPoint.y + verticalOffset };
       const spineX = point.x - connectorLength;
-      const startY = parentPoint?.y ?? point.y - readCssNumber(svg, '--np-guide-first-branch-rise', 10);
+      const startY = parentPoint?.y ?? point.y - readNumber('--np-guide-first-branch-rise', 10);
       appendPath(svg, buildRoundedPath({ endX: point.x, endY: point.y, radius, startX: spineX, startY }), 'np-property-thread-active', node.depth);
     }
   }
 
-  private drawRootPath(svg: SVGSVGElement, roots: PropertyFieldNode[], activeRoot: PropertyFieldNode, metrics: Map<PropertyFieldNode, Point>): void {
+  private drawRootPath(svg: SVGSVGElement, roots: PropertyFieldNode[], activeRoot: PropertyFieldNode, metrics: Map<PropertyFieldNode, Point>, readNumber: CssNumberReader): void {
     const rawActivePoint = metrics.get(activeRoot);
     const rawFirstPoint = roots[0] === undefined ? undefined : metrics.get(roots[0]);
     if (rawActivePoint === undefined || rawFirstPoint === undefined) {
       return;
     }
-    const connectorLength = readCssNumber(svg, '--np-thread-connector-length', 28);
-    const fieldGap = readCssNumber(svg, '--np-thread-field-gap', 4);
-    const radius = readCssNumber(svg, '--np-thread-corner-radius', 8);
-    const verticalOffset = readCssNumber(svg, '--np-thread-vertical-offset', 0);
+    const connectorLength = readNumber('--np-thread-connector-length', 28);
+    const fieldGap = readNumber('--np-thread-field-gap', 4);
+    const radius = readNumber('--np-thread-corner-radius', 8);
+    const verticalOffset = readNumber('--np-thread-vertical-offset', 0);
     const activePoint = { x: rawActivePoint.x - fieldGap, y: rawActivePoint.y + verticalOffset };
     const firstPoint = { x: rawFirstPoint.x - fieldGap, y: rawFirstPoint.y + verticalOffset };
     appendPath(
@@ -521,7 +610,7 @@ export class PropertyFieldVisualsComponent extends Component {
         endY: activePoint.y,
         radius,
         startX: Math.min(...roots.map((root) => (metrics.get(root)?.x ?? rawActivePoint.x) - fieldGap)) - connectorLength,
-        startY: firstPoint.y - readCssNumber(svg, '--np-guide-first-branch-rise', 10)
+        startY: firstPoint.y - readNumber('--np-guide-first-branch-rise', 10)
       }),
       'np-property-thread-root-active',
       0
@@ -644,6 +733,7 @@ export class PropertyFieldVisualsComponent extends Component {
     svg.setAttribute('height', String(tree.scrollHeight));
     tree.prepend(svg);
     const metrics = new Map<T, Point>();
+    const readNumber = createCssNumberReader(tree);
     for (const [index, entry] of entries.entries()) {
       const row = rows[index];
       if (row === undefined) {
@@ -651,14 +741,14 @@ export class PropertyFieldVisualsComponent extends Component {
       }
       const depth = entry.node.depth;
       metrics.set(entry.node, {
-        x: readCssNumber(tree, '--np-breadcrumb-indent', 18) * depth + readCssNumber(tree, '--np-breadcrumb-connector-length', 12) + 4,
+        x: readNumber('--np-breadcrumb-indent', 18) * depth + readNumber('--np-breadcrumb-connector-length', 12) + 4,
         y: row.offsetTop + row.offsetHeight / 2
       });
     }
     const entrySet = new Set(entries.map((entry) => entry.node));
     const roots = entries.filter((entry) => entry.node.parent === null || !entrySet.has(entry.node.parent)).map((entry) => entry.node);
     if (isStaticEnabled) {
-      this.drawForest(svg, roots, metrics, 'np-property-guide-breadcrumb');
+      this.drawForest(svg, roots, metrics, 'np-property-guide-breadcrumb', readNumber);
     }
     if (!isThreadingEnabled) {
       return;
@@ -669,23 +759,23 @@ export class PropertyFieldVisualsComponent extends Component {
     }
     const currentRoot = getPropertyFieldRoot(current);
     if (settings.isAllBranchesOfActiveRootLevelPropertyFieldTreeThreadingEnabled && settings.isAllBranchesOfActiveRootLevelPropertyFieldTreeThreadingInHoverBreadcrumbEnabled) {
-      this.drawForest(svg, roots, metrics, 'np-property-thread-root-all');
+      this.drawForest(svg, roots, metrics, 'np-property-thread-root-all', readNumber);
     } else if (settings.isAllBranchesOfActivePropertyFieldTreeThreadingEnabled && settings.isAllBranchesOfActivePropertyFieldTreeThreadingInHoverBreadcrumbEnabled) {
-      this.drawForest(svg, [currentRoot], metrics, 'np-property-thread-all');
+      this.drawForest(svg, [currentRoot], metrics, 'np-property-thread-all', readNumber);
     }
     if (settings.isActiveRootLevelPropertyFieldTreeThreadingEnabled && settings.isActiveRootLevelPropertyFieldThreadingEnabled && settings.isActiveRootLevelPropertyFieldThreadingInHoverBreadcrumbEnabled) {
-      this.drawGenericBreadcrumbPath(svg, [currentRoot], metrics, 'np-property-thread-root-active');
+      this.drawGenericBreadcrumbPath(svg, [currentRoot], metrics, 'np-property-thread-root-active', readNumber);
     }
     if (settings.isActivePropertyFieldThreadingEnabled && settings.isActivePropertyFieldThreadingInHoverBreadcrumbEnabled) {
-      this.drawGenericBreadcrumbPath(svg, getPropertyFieldAncestors(current), metrics, 'np-property-thread-active');
+      this.drawGenericBreadcrumbPath(svg, getPropertyFieldAncestors(current), metrics, 'np-property-thread-active', readNumber);
     }
   }
 
-  private drawGenericBreadcrumbPath<T extends { depth: number }>(svg: SVGSVGElement, nodes: T[], metrics: Map<T, Point>, className: string): void {
-    const connectorLength = readCssNumber(svg, '--np-breadcrumb-connector-length', 12);
-    const fieldGap = readCssNumber(svg, '--np-thread-field-gap', 4);
-    const radius = readCssNumber(svg, '--np-thread-corner-radius', 8);
-    const verticalOffset = readCssNumber(svg, '--np-thread-vertical-offset', 0);
+  private drawGenericBreadcrumbPath<T extends { depth: number }>(svg: SVGSVGElement, nodes: T[], metrics: Map<T, Point>, className: string, readNumber: CssNumberReader): void {
+    const connectorLength = readNumber('--np-breadcrumb-connector-length', 12);
+    const fieldGap = readNumber('--np-thread-field-gap', 4);
+    const radius = readNumber('--np-thread-corner-radius', 8);
+    const verticalOffset = readNumber('--np-thread-vertical-offset', 0);
     for (const [index, node] of nodes.entries()) {
       const rawPoint = metrics.get(node);
       if (rawPoint === undefined) {
@@ -702,7 +792,7 @@ export class PropertyFieldVisualsComponent extends Component {
           endY: point.y,
           radius,
           startX: point.x - connectorLength,
-          startY: parentPoint?.y ?? point.y - readCssNumber(svg, '--np-guide-first-branch-rise', 10)
+          startY: parentPoint?.y ?? point.y - readNumber('--np-guide-first-branch-rise', 10)
         }),
         className,
         node.depth
@@ -715,8 +805,9 @@ export class PropertyFieldVisualsComponent extends Component {
     if (win === null) {
       return;
     }
-    const anchorGap = readCssNumber(popover, '--np-breadcrumb-anchor-gap', 8);
-    const viewportGap = readCssNumber(popover, '--np-breadcrumb-viewport-gap', 8);
+    const readNumber = createCssNumberReader(popover);
+    const anchorGap = readNumber('--np-breadcrumb-anchor-gap', 8);
+    const viewportGap = readNumber('--np-breadcrumb-viewport-gap', 8);
     const left = Math.min(Math.max(viewportGap, anchorRect.left), Math.max(viewportGap, win.innerWidth - popover.offsetWidth - viewportGap));
     let top = anchorRect.bottom + anchorGap;
     if (top + popover.offsetHeight > win.innerHeight - viewportGap) {
@@ -877,6 +968,43 @@ function createNodeMetrics(container: HTMLElement, nodes: PropertyFieldNode[]): 
   return metrics;
 }
 
+export function createCssNumberReader(element: Element): CssNumberReader {
+  const styles = element.ownerDocument.defaultView?.getComputedStyle(element);
+  const values = new Map<string, number>();
+  function readNumber(variable: string, fallback: number): number {
+    const cached = values.get(variable);
+    if (cached !== undefined) {
+      return Number.isFinite(cached) ? cached : fallback;
+    }
+    const parsed = Number.parseFloat(styles?.getPropertyValue(variable).trim() ?? '');
+    values.set(variable, parsed);
+    return Number.isFinite(parsed) ? parsed : fallback;
+  }
+  return readNumber;
+}
+
+export function flattenVisiblePropertyFieldForest(roots: PropertyFieldNode[]): PropertyFieldNode[] {
+  const nodes: PropertyFieldNode[] = [];
+  function visit(items: PropertyFieldNode[]): void {
+    for (const item of items) {
+      nodes.push(item);
+      if (!item.element.classList.contains('is-collapsed')) {
+        visit(item.children);
+      }
+    }
+  }
+  visit(roots);
+  return nodes;
+}
+
+export function getShownMetadataContainers(ownerDocument: Document): HTMLElement[] {
+  return Array.from(ownerDocument.querySelectorAll<HTMLElement>(METADATA_CONTAINER_SELECTOR)).filter((container) => container.isShown());
+}
+
+export function isContainerRenderCurrent(snapshot: ContainerRenderSnapshot | undefined, generation: number, width: number, height: number, activeElement: HTMLElement | null): boolean {
+  return snapshot?.generation === generation && snapshot.width === width && snapshot.height === height && snapshot.activeElement === activeElement;
+}
+
 function detectViewMode(element: Element): ViewMode {
   if (element.closest('.markdown-preview-view, .markdown-reading-view') !== null) {
     return 'reading';
@@ -887,7 +1015,7 @@ function detectViewMode(element: Element): ViewMode {
 
 export function isPropertyFieldMutation(mutation: VisualMutation): boolean {
   const target = asElement(mutation.target);
-  if (target?.closest(OWNED_VISUAL_SELECTOR) !== null) {
+  if (target?.closest(`${OWNED_VISUAL_SELECTOR}, .nested-properties-header-actions`) !== null) {
     return false;
   }
   const changed = [...mutation.addedNodes, ...mutation.removedNodes];
@@ -899,6 +1027,11 @@ export function isPropertyFieldMutation(mutation: VisualMutation): boolean {
     return true;
   }
   return externalChanges.some(touchesMetadataContainer);
+}
+
+export function getPropertyFieldMutationContainers(mutation: VisualMutation): HTMLElement[] {
+  const container = asElement(mutation.target)?.closest<HTMLElement>(METADATA_CONTAINER_SELECTOR) ?? null;
+  return container === null ? [] : [container];
 }
 
 export function isPropertyVisualStyleMutation(mutation: VisualMutation): boolean {
@@ -936,12 +1069,6 @@ function isOwnedVisualNode(node: Node): boolean {
 function touchesMetadataContainer(node: Node): boolean {
   const element = asElement(node);
   return element?.matches(METADATA_CONTAINER_SELECTOR) === true || element?.closest(METADATA_CONTAINER_SELECTOR) !== null || element?.querySelector(METADATA_CONTAINER_SELECTOR) !== null;
-}
-
-function readCssNumber(element: Element, variable: string, fallback: number): number {
-  const value = element.ownerDocument.defaultView?.getComputedStyle(element).getPropertyValue(variable).trim() ?? '';
-  const parsed = Number.parseFloat(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
 }
 
 function removeVisualArtifacts(ownerDocument: Document): void {
