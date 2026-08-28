@@ -1,9 +1,27 @@
-import { readFileSync } from 'node:fs';
+import {
+  existsSync,
+  readFileSync
+} from 'node:fs';
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile
+} from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   describe,
   expect,
   it
 } from 'vitest';
+
+import {
+  copyBuildArtifactsToRoot,
+  removeRootBuildArtifacts,
+  ROOT_BUILD_ARTIFACT_FILE_NAMES
+} from '../scripts/build-artifacts.ts';
 
 function readRepoFile(path: string): string {
   return readFileSync(new URL(`../${path}`, import.meta.url), 'utf-8');
@@ -43,5 +61,32 @@ describe('property field feature release quality', () => {
     expect(workflow).toContain('attestations: write');
     expect(workflow).toContain('artifact-metadata: write');
     expect(workflow).toContain('subject-path: assets/*');
+  });
+
+  it('should mirror fresh production assets to the repository root for local deployment', async () => {
+    const rootFolder = await mkdtemp(join(tmpdir(), 'nested-properties-build-'));
+    const buildFolder = join(rootFolder, 'dist', 'build');
+
+    try {
+      await mkdir(buildFolder, { recursive: true });
+      for (const fileName of ROOT_BUILD_ARTIFACT_FILE_NAMES) {
+        await writeFile(join(buildFolder, fileName), `fresh ${fileName}`, 'utf-8');
+        await writeFile(join(rootFolder, fileName), `stale ${fileName}`, 'utf-8');
+      }
+
+      await copyBuildArtifactsToRoot(rootFolder);
+
+      for (const fileName of ROOT_BUILD_ARTIFACT_FILE_NAMES) {
+        await expect(readFile(join(rootFolder, fileName), 'utf-8')).resolves.toBe(`fresh ${fileName}`);
+      }
+
+      await removeRootBuildArtifacts(rootFolder);
+
+      for (const fileName of ROOT_BUILD_ARTIFACT_FILE_NAMES) {
+        expect(existsSync(join(rootFolder, fileName))).toBe(false);
+      }
+    } finally {
+      await rm(rootFolder, { force: true, recursive: true });
+    }
   });
 });

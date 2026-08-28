@@ -2,6 +2,7 @@
 
 ## 1.5.0
 
+- fix: mirror fresh production `main.js` and `styles.css` artifacts to the repository root for flat-layout local deployment scripts
 - feat: add searchable settings for property hover breadcrumbs, static tree guides, and property-field threading
 - feat: add clickable, keyboard-navigable property ancestry breadcrumbs in Live Preview, Source, and Reading modes
 - feat: add main-UI and breadcrumb tree guides with active-path, all-branch, root-level, and cursor-activated threading modes

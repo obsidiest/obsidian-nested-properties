@@ -23,6 +23,10 @@ npm install
 npm run build
 ```
 
+The canonical production bundle is written to `dist/build/`. The build also
+mirrors its fresh `main.js` and `styles.css` to the repository root for local
+deployment tools that expect the standard flat Obsidian plugin layout.
+
 ### Dev Mode
 
 ```bash
