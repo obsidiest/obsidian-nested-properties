@@ -84,3 +84,5 @@ For more details, refer to the [documentation](https://mnaoumov.dev/obsidian-dev
 ## License
 
 MIT
+
+© Michael Naumov
