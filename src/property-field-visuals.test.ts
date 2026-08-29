@@ -1,3 +1,4 @@
+import { castTo } from 'obsidian-dev-utils/object-utils';
 import {
   describe,
   expect,
@@ -10,14 +11,22 @@ import type { PropertyFieldNode } from './property-field-tree.ts';
 import {
   buildRoundedPath,
   createCssNumberReader,
+  findElementAtClientY,
   flattenVisiblePropertyFieldForest,
   getBreadcrumbKeyboardTarget,
   getPropertyFieldMutationContainers,
   getShownMetadataContainers,
+  getSourceKeyCharacterRange,
   getThreadDepthColorIndex,
   isContainerRenderCurrent,
   isPropertyFieldMutation,
-  isPropertyVisualStyleMutation
+  isPropertyVisualStyleMutation,
+  resolveBreadcrumbActivationScope,
+  resolveDomBreadcrumbPropertyAtPointer,
+  resolveDomPropertyAtPointer,
+  resolveSourceBreadcrumbLineAtPointer,
+  resolveSourceLine,
+  resolveSourceLineElementAtPointer
 } from './property-field-visuals.ts';
 
 type VisualMutation = Parameters<typeof isPropertyFieldMutation>[0];
@@ -87,6 +96,119 @@ describe('getThreadDepthColorIndex', () => {
 });
 
 describe('property field visual render guards', () => {
+  it('should prioritize full-field then full-key then toggle-only breadcrumb activation', () => {
+    expect(resolveBreadcrumbActivationScope(true, true)).toBe('field');
+    expect(resolveBreadcrumbActivationScope(false, true)).toBe('key');
+    expect(resolveBreadcrumbActivationScope(false, false)).toBe('toggle');
+  });
+
+  it('should resolve the full horizontal field from its vertical row band', () => {
+    const first = document.body.createDiv();
+    const second = document.body.createDiv();
+    vi.spyOn(first, 'getBoundingClientRect').mockReturnValue({ bottom: 30, height: 20, top: 10 } as DOMRect);
+    vi.spyOn(second, 'getBoundingClientRect').mockReturnValue({ bottom: 60, height: 20, top: 40 } as DOMRect);
+
+    expect(findElementAtClientY([first, second], 20)).toBe(first);
+    expect(findElementAtClientY([first, second], 50)).toBe(second);
+    expect(findElementAtClientY([first, second], 35)).toBeNull();
+    first.remove();
+    second.remove();
+  });
+
+  it('should resolve a rendered property from its key, value, or blank row width', () => {
+    const container = document.body.createDiv({ cls: 'metadata-container' });
+    const property = container.createDiv({ cls: 'metadata-property' });
+    const key = property.createDiv({ cls: 'metadata-property-key', text: 'Key' });
+    const value = property.createDiv({ cls: 'metadata-property-value', text: 'Value' });
+    vi.spyOn(key, 'getBoundingClientRect').mockReturnValue({ bottom: 40, height: 20, top: 20 } as DOMRect);
+
+    expect(resolveDomPropertyAtPointer(key, 30)).toBe(property);
+    expect(resolveDomPropertyAtPointer(value, 30)).toBe(property);
+    expect(resolveDomPropertyAtPointer(container, 30)).toBe(property);
+    expect(resolveDomPropertyAtPointer(container, 50)).toBeNull();
+    container.remove();
+  });
+
+  it('should apply field, key, and icon activation scopes without changing full-row resolution', () => {
+    const container = document.body.createDiv({ cls: 'metadata-container' });
+    const property = container.createDiv({ cls: 'metadata-property' });
+    const key = property.createDiv({ cls: 'metadata-property-key' });
+    const icon = key.createDiv({ cls: 'metadata-property-icon' });
+    const collapse = key.createDiv({ cls: 'nested-properties-collapse-btn' });
+    const value = property.createDiv({ cls: 'metadata-property-value' });
+    vi.spyOn(key, 'getBoundingClientRect').mockReturnValue({ bottom: 40, height: 20, top: 20 } as DOMRect);
+
+    expect(resolveDomBreadcrumbPropertyAtPointer(value, 30, 'field')).toBe(property);
+    expect(resolveDomBreadcrumbPropertyAtPointer(key, 30, 'key')).toBe(property);
+    expect(resolveDomBreadcrumbPropertyAtPointer(value, 30, 'key')).toBeNull();
+    expect(resolveDomBreadcrumbPropertyAtPointer(icon, 30, 'toggle')).toBe(property);
+    expect(resolveDomBreadcrumbPropertyAtPointer(collapse, 30, 'toggle')).toBe(property);
+    expect(resolveDomBreadcrumbPropertyAtPointer(key, 30, 'toggle')).toBeNull();
+    expect(resolveDomPropertyAtPointer(value, 30)).toBe(property);
+    container.remove();
+  });
+
+  it('should resolve a Source-mode property line across its full editor width', () => {
+    const sourceView = document.body.createDiv({ cls: 'markdown-source-view mod-cm6' });
+    const line = sourceView.createDiv({ cls: 'cm-line', text: 'root: value' });
+    vi.spyOn(line, 'getBoundingClientRect').mockReturnValue({ bottom: 40, height: 20, top: 20 } as DOMRect);
+
+    expect(resolveSourceLineElementAtPointer(line, 30)).toBe(line);
+    expect(resolveSourceLineElementAtPointer(sourceView, 30)).toBe(line);
+    expect(resolveSourceLineElementAtPointer(sourceView, 50)).toBeNull();
+    expect(resolveSourceLineElementAtPointer(document.body, 30)).toBeNull();
+    sourceView.remove();
+  });
+
+  it('should identify Source-mode YAML key character ranges', () => {
+    expect(getSourceKeyCharacterRange('  root: value')).toEqual({ end: 7, start: 2 });
+    expect(getSourceKeyCharacterRange('  - name: Ada')).toEqual({ end: 9, start: 4 });
+    expect(getSourceKeyCharacterRange('  - scalar')).toEqual({ end: 3, start: 2 });
+    expect(getSourceKeyCharacterRange('  "quoted:key": value')).toEqual({ end: 15, start: 2 });
+    expect(getSourceKeyCharacterRange('flow[key:part]: value')).toEqual({ end: 15, start: 0 });
+    expect(getSourceKeyCharacterRange('not a mapping')).toBeNull();
+  });
+
+  it('should apply full-field, key-range, and fold-toggle Source activation scopes', () => {
+    const sourceView = document.body.createDiv({ cls: 'markdown-source-view mod-cm6' });
+    const content = sourceView.createDiv({ cls: 'cm-content' });
+    const line = content.createDiv({ cls: 'cm-line', text: 'root: value' });
+    const foldGutter = sourceView.createDiv({ cls: 'cm-foldGutter' });
+    const foldToggle = foldGutter.createDiv({ cls: 'cm-gutterElement', text: '⌄' });
+    const emptyGutter = foldGutter.createDiv({ cls: 'cm-gutterElement' });
+    vi.spyOn(line, 'getBoundingClientRect').mockReturnValue({ bottom: 40, height: 20, top: 20 } as DOMRect);
+    const createRange = vi.spyOn(document, 'createRange').mockReturnValue(castTo<Range>({
+      getBoundingClientRect: () => ({ left: 10, right: 70, width: 60 }),
+      getClientRects: () => [],
+      setEnd: vi.fn(),
+      setStart: vi.fn()
+    }));
+
+    expect(resolveSourceBreadcrumbLineAtPointer(sourceView, 500, 30, 'field')).toBe(line);
+    expect(resolveSourceBreadcrumbLineAtPointer(line, 40, 30, 'key')).toBe(line);
+    expect(resolveSourceBreadcrumbLineAtPointer(line, 90, 30, 'key')).toBeNull();
+    expect(resolveSourceBreadcrumbLineAtPointer(foldToggle, 500, 30, 'toggle')).toBe(line);
+    expect(resolveSourceBreadcrumbLineAtPointer(emptyGutter, 500, 30, 'toggle')).toBeNull();
+    expect(resolveSourceBreadcrumbLineAtPointer(line, 40, 30, 'toggle')).toBeNull();
+    createRange.mockRestore();
+    sourceView.remove();
+  });
+
+  it('should disambiguate duplicate Source-mode keys from surrounding visible YAML lines', () => {
+    const source = ['---', 'Retail Prices:', '  Worldwide:', '    "1":', '      Date:', '      Price:', 'Other:', '  Price:', '---'].join('\n');
+    const content = document.body.createDiv({ cls: 'cm-content' });
+    const lines = source.split('\n').slice(1, 8).map((text) => content.createDiv({ cls: 'cm-line', text }));
+    const nestedPrice = lines[4];
+    if (nestedPrice === undefined) {
+      throw new Error('Expected the nested Price line');
+    }
+
+    expect(resolveSourceLine(nestedPrice, source, 7)).toBe(5);
+    nestedPrice.dataset['line'] = '12';
+    expect(resolveSourceLine(nestedPrice, source, 7)).toBe(12);
+    content.remove();
+  });
+
   it('should resolve computed Style Settings variables once per tree render', () => {
     const element = document.body.createDiv();
     element.setCssProps({ '--np-first': '12.5px' });

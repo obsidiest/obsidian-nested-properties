@@ -56,6 +56,11 @@ describe('full key display command', () => {
 
         const view = app.workspace.getActiveViewOfType(obsidianModule.MarkdownView);
         const containerEl = view?.contentEl ?? activeDocument.body;
+        const metadataContainer = containerEl.querySelector('.metadata-container');
+        if (!(metadataContainer instanceof HTMLElement)) {
+          throw new TypeError('metadata container not found');
+        }
+        const metadataContainerEl = metadataContainer;
 
         // Expand the root nested property only if it is currently collapsed. The renderer remembers
         // Expanded paths across the shared Obsidian instance, so a blind toggle could collapse a
@@ -75,10 +80,16 @@ describe('full key display command', () => {
             throw new TypeError('nested key input not found');
           }
           return {
-            hasFullKeyDisplayClass: activeDocument.body.hasClass('nested-properties-full-key-display'),
+            hasFullKeyDisplayClass: metadataContainerEl.hasClass('nested-properties-full-key-display'),
             isTruncated: keyInput.scrollWidth > keyInput.clientWidth + TRUNCATION_TOLERANCE_IN_PIXELS,
             keyValue: keyInput.value
           };
+        }
+
+        // Normalize to collapsed key names so the assertions do not depend on remembered state.
+        if (metadataContainer.hasClass('nested-properties-full-key-display')) {
+          app.commands.executeCommandById('nested-properties:toggle-full-key-display');
+          await sleep(SETTLE_IN_MILLISECONDS);
         }
 
         const before = measure();
@@ -125,6 +136,11 @@ describe('full key display command', () => {
 
         const view = app.workspace.getActiveViewOfType(obsidianModule.MarkdownView);
         const containerEl = view?.contentEl ?? activeDocument.body;
+        const metadataContainer = containerEl.querySelector('.metadata-container');
+        if (!(metadataContainer instanceof HTMLElement)) {
+          throw new TypeError('metadata container not found');
+        }
+        const metadataContainerEl = metadataContainer;
 
         // Expand the top-level object property only if it is currently collapsed. The renderer remembers
         // Expanded paths across the shared Obsidian instance, so a blind toggle could collapse a
@@ -144,14 +160,14 @@ describe('full key display command', () => {
             throw new TypeError('top-level key input not found');
           }
           return {
-            hasFullKeyDisplayClass: activeDocument.body.hasClass('nested-properties-full-key-display'),
+            hasFullKeyDisplayClass: metadataContainerEl.hasClass('nested-properties-full-key-display'),
             isTruncated: keyInput.scrollWidth > keyInput.clientWidth + TRUNCATION_TOLERANCE_IN_PIXELS,
             keyValue: keyInput.value
           };
         }
 
         // Normalize to the disabled state so the assertions do not depend on earlier tests.
-        if (activeDocument.body.hasClass('nested-properties-full-key-display')) {
+        if (metadataContainer.hasClass('nested-properties-full-key-display')) {
           app.commands.executeCommandById('nested-properties:toggle-full-key-display');
           await sleep(SETTLE_IN_MILLISECONDS);
         }
@@ -200,6 +216,11 @@ describe('full key display command', () => {
 
         const view = app.workspace.getActiveViewOfType(obsidianModule.MarkdownView);
         const containerEl = view?.contentEl ?? activeDocument.body;
+        const metadataContainer = containerEl.querySelector('.metadata-container');
+        if (!(metadataContainer instanceof HTMLElement)) {
+          throw new TypeError('metadata container not found');
+        }
+        const metadataContainerEl = metadataContainer;
 
         function measure(): KeyDisplayMeasurement {
           // The scalar key is rendered natively by Obsidian - not inside `.nested-properties-container`
@@ -210,14 +231,14 @@ describe('full key display command', () => {
             throw new TypeError('top-level scalar key input not found');
           }
           return {
-            hasFullKeyDisplayClass: activeDocument.body.hasClass('nested-properties-full-key-display'),
+            hasFullKeyDisplayClass: metadataContainerEl.hasClass('nested-properties-full-key-display'),
             isTruncated: keyInput.scrollWidth > keyInput.clientWidth + TRUNCATION_TOLERANCE_IN_PIXELS,
             keyValue: keyInput.value
           };
         }
 
         // Normalize to the disabled state so the assertions do not depend on earlier tests.
-        if (activeDocument.body.hasClass('nested-properties-full-key-display')) {
+        if (metadataContainer.hasClass('nested-properties-full-key-display')) {
           app.commands.executeCommandById('nested-properties:toggle-full-key-display');
           await sleep(SETTLE_IN_MILLISECONDS);
         }
@@ -293,15 +314,21 @@ describe('full key display command', () => {
 
         const hasIcon = headerButton.querySelector('svg') !== null;
         const isTruncatedBefore = isTruncated();
+        const labelBefore = headerButton.getAttribute('aria-label');
         headerButton.click();
         await sleep(SETTLE_IN_MILLISECONDS);
         const isTruncatedAfterFirstClick = isTruncated();
+        const labelAfterFirstClick = headerButton.getAttribute('aria-label');
         headerButton.click();
         await sleep(SETTLE_IN_MILLISECONDS);
         const isTruncatedAfterSecondClick = isTruncated();
+        const labelAfterSecondClick = headerButton.getAttribute('aria-label');
 
         return {
           hasIcon,
+          labelAfterFirstClick,
+          labelAfterSecondClick,
+          labelBefore,
           truncatedAfterFirstClick: isTruncatedAfterFirstClick,
           truncatedAfterSecondClick: isTruncatedAfterSecondClick,
           truncatedBefore: isTruncatedBefore
@@ -313,6 +340,9 @@ describe('full key display command', () => {
     expect(result.hasIcon).toBe(true);
     expect(result.truncatedAfterFirstClick).toBe(!result.truncatedBefore);
     expect(result.truncatedAfterSecondClick).toBe(result.truncatedBefore);
+    expect(result.labelBefore).toBe(result.truncatedBefore ? 'Expand Full Key Names' : 'Collapse Full Key Names');
+    expect(result.labelAfterFirstClick).toBe(result.truncatedAfterFirstClick ? 'Expand Full Key Names' : 'Collapse Full Key Names');
+    expect(result.labelAfterSecondClick).toBe(result.truncatedAfterSecondClick ? 'Expand Full Key Names' : 'Collapse Full Key Names');
   });
 
   it('persists full key display across a plugin reload', async () => {
@@ -330,23 +360,27 @@ describe('full key display command', () => {
         await app.workspace.getLeaf(true).openFile(file);
         await sleep(SETTLE_IN_MILLISECONDS);
 
+        function hasFullKeyClass(): boolean {
+          return activeDocument.querySelector(':scope .workspace-leaf.mod-active .metadata-container')?.hasClass(FULL_KEY_CLASS) === true;
+        }
+
         // Normalize to the disabled state so the assertions do not depend on earlier tests.
-        if (activeDocument.body.hasClass(FULL_KEY_CLASS)) {
+        if (hasFullKeyClass()) {
           app.commands.executeCommandById(TOGGLE_COMMAND_ID);
           await sleep(SETTLE_IN_MILLISECONDS);
         }
 
         app.commands.executeCommandById(TOGGLE_COMMAND_ID);
         await sleep(SETTLE_IN_MILLISECONDS);
-        const isClassAfterToggle = activeDocument.body.hasClass(FULL_KEY_CLASS);
+        const isClassAfterToggle = hasFullKeyClass();
 
         await app.plugins.disablePlugin(PLUGIN_ID);
         await sleep(SETTLE_IN_MILLISECONDS);
-        const isClassAfterDisable = activeDocument.body.hasClass(FULL_KEY_CLASS);
+        const isClassAfterDisable = hasFullKeyClass();
 
         await app.plugins.enablePlugin(PLUGIN_ID);
         await sleep(SETTLE_IN_MILLISECONDS);
-        const isClassAfterReenable = activeDocument.body.hasClass(FULL_KEY_CLASS);
+        const isClassAfterReenable = hasFullKeyClass();
 
         // Reset to the disabled state so other tests start clean.
         app.commands.executeCommandById(TOGGLE_COMMAND_ID);

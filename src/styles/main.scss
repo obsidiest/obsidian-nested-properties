@@ -93,6 +93,12 @@
   vertical-align: middle;
 }
 
+.nested-properties-main-ui-toggle-disabled {
+  color: var(--text-faint) !important;
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .nested-properties-add-item,
 .nested-properties-add-property {
   display: inline-flex;
@@ -222,6 +228,12 @@ body {
   --np-active-field-outline-thickness: 1px;
   --np-active-field-outline-opacity: 0.55;
   --np-active-field-outline-offset: 1px;
+  --np-active-tree-color: #7aa2f7;
+  --np-active-tree-background-opacity: 0.08;
+  --np-active-tree-outline-thickness: 1px;
+  --np-active-tree-outline-opacity: 0.45;
+  --np-active-tree-outline-offset: -1px;
+  --np-active-tree-radius: 6px;
   --np-thread-color-1: #ff5a00;
   --np-thread-color-2: #ffc400;
   --np-thread-color-3: #a8e600;
@@ -279,6 +291,7 @@ body {
 body.theme-light {
   --np-guide-color: #777777;
   --np-active-field-color: #4c78cc;
+  --np-active-tree-color: #4c78cc;
   --np-thread-fallback-color: var(--np-thread-fallback-color-light);
   --np-thread-override-color: var(--np-thread-override-color-light);
   --np-breadcrumb-background: #ffffff;
@@ -409,6 +422,8 @@ body.np-thread-override-colors-enabled {
 }
 
 .np-property-field-source-highlight {
+  display: block;
+  width: 100%;
   border-radius: var(--np-active-field-radius);
   background: color-mix(in srgb, var(--np-active-field-color) calc(var(--np-active-field-opacity) * 100%), transparent);
   outline: var(--np-active-field-outline-thickness) solid color-mix(in srgb, var(--np-active-field-color) calc(var(--np-active-field-outline-opacity) * 100%), transparent);
@@ -455,7 +470,7 @@ body.np-thread-override-colors-enabled {
 .np-property-breadcrumb-guides {
   position: absolute;
   inset: 0 auto auto 0;
-  z-index: 0;
+  z-index: 2;
   overflow: visible;
   pointer-events: none;
 }
@@ -472,6 +487,22 @@ body.np-thread-override-colors-enabled {
   &.is-current .np-property-breadcrumb-key {
     color: var(--np-breadcrumb-current-color);
   }
+}
+
+body:not(.np-highlight-active-property-field-tree-enabled) .nested-properties-collapsible:has(> .metadata-property-value > .nested-properties-container .metadata-property:focus-within) {
+  background: transparent;
+  outline: none;
+  box-shadow: none;
+}
+
+body.np-highlight-active-property-field-tree-enabled :is(
+  .metadata-property:focus-within,
+  .nested-properties-collapsible:has(> .metadata-property-value > .nested-properties-container .metadata-property:focus-within)
+) {
+  border-radius: var(--np-active-tree-radius);
+  background: color-mix(in srgb, var(--np-active-tree-color) calc(var(--np-active-tree-background-opacity) * 100%), transparent);
+  outline: var(--np-active-tree-outline-thickness) solid color-mix(in srgb, var(--np-active-tree-color) calc(var(--np-active-tree-outline-opacity) * 100%), transparent);
+  outline-offset: var(--np-active-tree-outline-offset);
 }
 
 .np-property-breadcrumb-key {
@@ -788,6 +819,63 @@ settings:
     type: variable-number-slider
     default: 1
     min: -4
+    max: 12
+    step: 0.25
+    format: px
+  -
+    id: np-active-tree-highlight
+    title: Active Property Field Tree Highlight
+    type: heading
+    level: 3
+    collapsed: true
+  -
+    id: np-active-tree-color
+    title: Active property field tree color
+    type: variable-themed-color
+    format: hex
+    opacity: false
+    default-light: '#4c78cc'
+    default-dark: '#7aa2f7'
+  -
+    id: np-active-tree-background-opacity
+    title: Active property field tree background opacity
+    type: variable-number-slider
+    default: 0.08
+    min: 0
+    max: 1
+    step: 0.01
+  -
+    id: np-active-tree-radius
+    title: Active property field tree radius
+    type: variable-number-slider
+    default: 6
+    min: 0
+    max: 24
+    step: 0.5
+    format: px
+  -
+    id: np-active-tree-outline-thickness
+    title: Active property field tree outline thickness
+    type: variable-number-slider
+    default: 1
+    min: 0
+    max: 8
+    step: 0.25
+    format: px
+  -
+    id: np-active-tree-outline-opacity
+    title: Active property field tree outline opacity
+    type: variable-number-slider
+    default: 0.45
+    min: 0
+    max: 1
+    step: 0.01
+  -
+    id: np-active-tree-outline-offset
+    title: Active property field tree outline offset
+    type: variable-number-slider
+    default: -1
+    min: -8
     max: 12
     step: 0.25
     format: px

@@ -61,13 +61,15 @@ A copy of the vault ships with every release. You can access it via any of the f
 
 - **Nested objects and arrays as a tree** in the Properties panel, collapsible to any depth. [01 Nested objects](<./demo-vault/01 Nested objects.md>) · [02 Nested arrays](<./demo-vault/02 Nested arrays.md>) · [05 Deeply nested and scrolling](<./demo-vault/05 Deeply nested and scrolling.md>)
 - **Mixed and complex shapes** — lists holding different types, and arrays of objects. [03 Mixed lists](<./demo-vault/03 Mixed lists.md>) · [04 Array of objects](<./demo-vault/04 Array of objects.md>)
-- **Edit in place** — add, remove and reorder entries from the context menu, and change a nested property's type without rewriting the YAML. [06 Context menu actions](<./demo-vault/06 Context menu actions.md>) · [07 Changing property types](<./demo-vault/07 Changing property types.md>)
+- **Edit in place** — add, rename, remove and reorder nested entries, and change a nested property's type without rewriting the YAML. [06 Context menu actions](<./demo-vault/06 Context menu actions.md>) · [07 Changing property types](<./demo-vault/07 Changing property types.md>)
 - **Rename or delete a nested key across the whole vault**, not just in the note you are looking at. [09 Vault-wide rename and delete](<./demo-vault/09 Vault-wide rename and delete.md>)
 - **Find them** — search nested properties the way you search anything else. [10 Search nested properties](<./demo-vault/10 Search nested properties.md>)
 - **See the full key** of a nested entry when the short name is ambiguous. [08 Full key display](<./demo-vault/08 Full key display.md>)
 - **Follow the hierarchy at a glance** with continuous static tree guides in the main Properties UI and in an optional hover breadcrumb. [11 Property field guides, breadcrumbs, and threading](<./demo-vault/11 Property field guides, breadcrumbs, and threading.md>)
-- **Navigate a field's ancestry** from a clickable, scrollable, keyboard-navigable hover breadcrumb in Live Preview, Source, or Reading mode. Each mode can be enabled independently.
+- **Navigate a field's ancestry** from a clickable, scrollable, keyboard-navigable hover breadcrumb in Live Preview, Source, or Reading mode. Each mode can be enabled independently, with full-field, full-key, or icon/expansion-toggle-only activation.
 - **Thread an active property tree** by hovered field or focused cursor, with independent active-path, all-branches, root-level, main-UI, and breadcrumb controls.
+- **Remember or globally control header toggles** for nested-tree expansion and full key names, while keeping per-note controls visible and optionally disabling them.
+- **Optionally highlight the active property field tree**, with its color, opacity, outline, offset, thickness, and radius adjustable through Style Settings.
 - **Style every visual detail** through the Style Settings plugin, including guide geometry, line patterns, per-depth colors, breadcrumb typography, spacing, borders, and shadows. Every numerical slider also gets a synchronized precise input.
 
 The plugin settings page is searchable. Feature-specific controls remain visible but disabled until their parent feature is enabled, so their relationships are clear without letting inactive subfeatures change runtime behavior.

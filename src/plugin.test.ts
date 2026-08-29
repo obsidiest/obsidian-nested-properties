@@ -222,7 +222,7 @@ describe('Plugin', () => {
 
       expect(addCommandSpy).toHaveBeenCalledWith(expect.objectContaining({
         id: 'toggle-full-key-display',
-        name: 'Toggle full key display'
+        name: 'Toggle full key names'
       }));
     });
 

@@ -71,62 +71,189 @@ describe('NestedPropertiesPluginSettingTab', () => {
     const items = getItems(tab);
     const controls = items.map((item) => item.control).filter((control): control is TestControl => control !== undefined);
 
-    expect(definitions).toHaveLength(4);
-    expect(new Set(controls.map((control) => control.key))).toEqual(new Set(Object.keys(new PluginSettings())));
+    const booleanKeys = Object.entries(new PluginSettings()).filter(([, value]) => typeof value === 'boolean').map(([key]) => key);
+    expect(definitions).toHaveLength(5);
+    expect(new Set(controls.map((control) => control.key))).toEqual(new Set(booleanKeys));
     expect(items.every((item) => item.aliases !== undefined && item.aliases.length > 0 && item.desc !== undefined && item.name !== undefined)).toBe(true);
   });
 
-  it('should enable and disable every subordinate control from current parent states', () => {
+  it('should make surface, feature, global, and remember controls genuinely superordinate', () => {
     const { settings, tab } = createSettingTab();
-    const controls = getItems(tab).map((item) => item.control).filter((control): control is DisabledTestControl => control?.disabled !== undefined);
-    const outcomes = new Map<keyof PluginSettings, Set<boolean>>(controls.map((control) => [control.key, new Set<boolean>()]));
-    const states = [false, true];
-
-    for (const isBreadcrumbEnabled of states) {
-      for (const isThreadingEnabled of states) {
-        for (const isRootTreeEnabled of states) {
-          for (const isActiveEnabled of states) {
-            for (const isAllBranchesEnabled of states) {
-              for (const isActiveRootEnabled of states) {
-                for (const isAllRootBranchesEnabled of states) {
-                  Object.assign(settings, {
-                    isActivePropertyFieldThreadingEnabled: isActiveEnabled,
-                    isActiveRootLevelPropertyFieldThreadingEnabled: isActiveRootEnabled,
-                    isActiveRootLevelPropertyFieldTreeThreadingEnabled: isRootTreeEnabled,
-                    isAllBranchesOfActivePropertyFieldTreeThreadingEnabled: isAllBranchesEnabled,
-                    isAllBranchesOfActiveRootLevelPropertyFieldTreeThreadingEnabled: isAllRootBranchesEnabled,
-                    isPropertyFieldHoverBreadcrumbEnabled: isBreadcrumbEnabled,
-                    isPropertyFieldThreadingEnabled: isThreadingEnabled
-                  });
-                  for (const control of controls) {
-                    outcomes.get(control.key)?.add(control.disabled());
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
+    const controls = new Map(getItems(tab).map((item) => item.control).filter((control): control is DisabledTestControl => control?.disabled !== undefined).map((control) => [control.key, control]));
+    function isDisabled(key: keyof PluginSettings): boolean {
+      return controls.get(key)?.disabled() ?? false;
     }
 
-    expect([...outcomes.values()].every((values) => values.has(false) && values.has(true))).toBe(true);
+    settings.isPropertyFieldThreadingEnabled = true;
+    settings.isPropertyFieldHoverBreadcrumbEnabled = true;
+    settings.isActivePropertyFieldThreadingEnabled = true;
+    settings.isPropertyFieldThreadingInMainUiEnabled = false;
+    settings.isPropertyFieldThreadingInHoverBreadcrumbEnabled = false;
+    expect(isDisabled('isActivePropertyFieldThreadingInMainUiEnabled')).toBe(true);
+    expect(isDisabled('isActivePropertyFieldThreadingInHoverBreadcrumbEnabled')).toBe(true);
+    settings.isPropertyFieldThreadingInMainUiEnabled = true;
+    settings.isPropertyFieldThreadingInHoverBreadcrumbEnabled = true;
+    expect(isDisabled('isActivePropertyFieldThreadingInMainUiEnabled')).toBe(false);
+    expect(isDisabled('isActivePropertyFieldThreadingInHoverBreadcrumbEnabled')).toBe(false);
+
+    settings.isRememberLastUsedMainUiToggleStatesEnabled = false;
+    settings.isGlobalToggleAllNestedPropertiesEnabled = false;
+    settings.isGlobalToggleFullKeyNamesEnabled = false;
+    expect(isDisabled('isRememberAllNestedPropertiesExpansionToggleStateEnabled')).toBe(true);
+    expect(isDisabled('isGlobalExpandAllNestedPropertiesEnabled')).toBe(true);
+    expect(isDisabled('isGlobalExpandFullKeyNamesEnabled')).toBe(true);
+  });
+
+  it('should evaluate every subordinate dependency in enabled and disabled states', () => {
+    const { settings, tab } = createSettingTab();
+    const controls = new Map(getItems(tab).map((item) => item.control).filter((control): control is DisabledTestControl => control?.disabled !== undefined).map((control) => [control.key, control]));
+    function isDisabled(key: keyof PluginSettings): boolean {
+      return controls.get(key)?.disabled() ?? false;
+    }
+
+    settings.isRememberLastUsedMainUiToggleStatesEnabled = false;
+    expect(isDisabled('isRememberAllNestedPropertiesExpansionToggleStateEnabled')).toBe(true);
+    expect(isDisabled('isRememberFullKeyNamesExpansionToggleStateEnabled')).toBe(true);
+    settings.isRememberLastUsedMainUiToggleStatesEnabled = true;
+    expect(isDisabled('isRememberAllNestedPropertiesExpansionToggleStateEnabled')).toBe(false);
+    expect(isDisabled('isRememberFullKeyNamesExpansionToggleStateEnabled')).toBe(false);
+
+    settings.isGlobalToggleAllNestedPropertiesEnabled = false;
+    expect(isDisabled('isGlobalExpandAllNestedPropertiesEnabled')).toBe(true);
+    expect(isDisabled('isGlobalCollapseAllNestedPropertiesEnabled')).toBe(true);
+    settings.isGlobalToggleAllNestedPropertiesEnabled = true;
+    expect(isDisabled('isGlobalExpandAllNestedPropertiesEnabled')).toBe(false);
+    expect(isDisabled('isGlobalCollapseAllNestedPropertiesEnabled')).toBe(false);
+    settings.isGlobalToggleFullKeyNamesEnabled = false;
+    expect(isDisabled('isGlobalExpandFullKeyNamesEnabled')).toBe(true);
+    expect(isDisabled('isGlobalCollapseFullKeyNamesEnabled')).toBe(true);
+    settings.isGlobalToggleFullKeyNamesEnabled = true;
+    expect(isDisabled('isGlobalExpandFullKeyNamesEnabled')).toBe(false);
+    expect(isDisabled('isGlobalCollapseFullKeyNamesEnabled')).toBe(false);
+
+    settings.isPropertyFieldHoverBreadcrumbEnabled = false;
+    for (
+      const key of [
+        'isPropertyFieldHoverBreadcrumbInLivePreviewEnabled',
+        'isPropertyFieldHoverBreadcrumbInSourceModeEnabled',
+        'isPropertyFieldHoverBreadcrumbInReadingModeEnabled',
+        'isPropertyFieldHoverBreadcrumbStaticTreeIndentationGuidesEnabled',
+        'isFullWidthPropertyFieldHoverActivationEnabled',
+        'isFullWidthPropertyKeyHoverActivationEnabled'
+      ] as const
+    ) {
+      expect(isDisabled(key)).toBe(true);
+    }
+    settings.isPropertyFieldHoverBreadcrumbEnabled = true;
+    for (
+      const key of [
+        'isPropertyFieldHoverBreadcrumbInLivePreviewEnabled',
+        'isPropertyFieldHoverBreadcrumbInSourceModeEnabled',
+        'isPropertyFieldHoverBreadcrumbInReadingModeEnabled',
+        'isPropertyFieldHoverBreadcrumbStaticTreeIndentationGuidesEnabled',
+        'isFullWidthPropertyFieldHoverActivationEnabled',
+        'isFullWidthPropertyKeyHoverActivationEnabled'
+      ] as const
+    ) {
+      expect(isDisabled(key)).toBe(false);
+    }
+
+    settings.isPropertyFieldThreadingEnabled = false;
+    expect(isDisabled('isPropertyFieldThreadingInMainUiEnabled')).toBe(true);
+    expect(isDisabled('isPropertyFieldThreadingInHoverBreadcrumbEnabled')).toBe(true);
+    expect(isDisabled('isActiveRootLevelPropertyFieldThreadingEnabled')).toBe(true);
+    settings.isPropertyFieldThreadingEnabled = true;
+    settings.isPropertyFieldHoverBreadcrumbEnabled = false;
+    expect(isDisabled('isPropertyFieldThreadingInHoverBreadcrumbEnabled')).toBe(true);
+    settings.isPropertyFieldHoverBreadcrumbEnabled = true;
+    expect(isDisabled('isPropertyFieldThreadingInHoverBreadcrumbEnabled')).toBe(false);
+
+    settings.isPropertyFieldThreadingInMainUiEnabled = false;
+    expect(isDisabled('isActivePropertyFieldThreadingInMainUiEnabled')).toBe(true);
+    settings.isPropertyFieldThreadingInMainUiEnabled = true;
+    settings.isActivePropertyFieldThreadingEnabled = false;
+    expect(isDisabled('isActivePropertyFieldThreadingInMainUiEnabled')).toBe(true);
+    settings.isActivePropertyFieldThreadingEnabled = true;
+    expect(isDisabled('isActivePropertyFieldThreadingInMainUiEnabled')).toBe(false);
+
+    settings.isPropertyFieldThreadingInHoverBreadcrumbEnabled = false;
+    expect(isDisabled('isActivePropertyFieldThreadingInHoverBreadcrumbEnabled')).toBe(true);
+    settings.isPropertyFieldThreadingInHoverBreadcrumbEnabled = true;
+    settings.isActivePropertyFieldThreadingEnabled = false;
+    expect(isDisabled('isActivePropertyFieldThreadingInHoverBreadcrumbEnabled')).toBe(true);
+    settings.isActivePropertyFieldThreadingEnabled = true;
+    expect(isDisabled('isActivePropertyFieldThreadingInHoverBreadcrumbEnabled')).toBe(false);
+
+    settings.isAllBranchesOfActivePropertyFieldTreeThreadingEnabled = false;
+    expect(isDisabled('isAllBranchesOfActivePropertyFieldTreeThreadingInMainUiEnabled')).toBe(true);
+    expect(isDisabled('isAllBranchesOfActivePropertyFieldTreeThreadingInHoverBreadcrumbEnabled')).toBe(true);
+    settings.isAllBranchesOfActivePropertyFieldTreeThreadingEnabled = true;
+    expect(isDisabled('isAllBranchesOfActivePropertyFieldTreeThreadingInMainUiEnabled')).toBe(false);
+    expect(isDisabled('isAllBranchesOfActivePropertyFieldTreeThreadingInHoverBreadcrumbEnabled')).toBe(false);
+
+    settings.isActiveRootLevelPropertyFieldTreeThreadingEnabled = false;
+    expect(isDisabled('isActiveRootLevelPropertyFieldThreadingEnabled')).toBe(true);
+    expect(isDisabled('isActiveRootLevelPropertyFieldThreadingInMainUiEnabled')).toBe(true);
+    expect(isDisabled('isActiveRootLevelPropertyFieldThreadingInHoverBreadcrumbEnabled')).toBe(true);
+    settings.isActiveRootLevelPropertyFieldTreeThreadingEnabled = true;
+    settings.isActiveRootLevelPropertyFieldThreadingEnabled = false;
+    expect(isDisabled('isActiveRootLevelPropertyFieldThreadingInMainUiEnabled')).toBe(true);
+    expect(isDisabled('isActiveRootLevelPropertyFieldThreadingInHoverBreadcrumbEnabled')).toBe(true);
+    settings.isActiveRootLevelPropertyFieldThreadingEnabled = true;
+    expect(isDisabled('isActiveRootLevelPropertyFieldThreadingEnabled')).toBe(false);
+    expect(isDisabled('isActiveRootLevelPropertyFieldThreadingInMainUiEnabled')).toBe(false);
+    expect(isDisabled('isActiveRootLevelPropertyFieldThreadingInHoverBreadcrumbEnabled')).toBe(false);
+
+    settings.isAllBranchesOfActiveRootLevelPropertyFieldTreeThreadingEnabled = false;
+    expect(isDisabled('isAllBranchesOfActiveRootLevelPropertyFieldTreeThreadingInMainUiEnabled')).toBe(true);
+    expect(isDisabled('isAllBranchesOfActiveRootLevelPropertyFieldTreeThreadingInHoverBreadcrumbEnabled')).toBe(true);
+    settings.isAllBranchesOfActiveRootLevelPropertyFieldTreeThreadingEnabled = true;
+    expect(isDisabled('isAllBranchesOfActiveRootLevelPropertyFieldTreeThreadingInMainUiEnabled')).toBe(false);
+    expect(isDisabled('isAllBranchesOfActiveRootLevelPropertyFieldTreeThreadingInHoverBreadcrumbEnabled')).toBe(false);
   });
 
   it('should read, validate, persist, and refresh control values', async () => {
     const { editAndSave, onSettingsChanged, settings, tab } = createSettingTab();
     const update = vi.spyOn(tab, 'update').mockImplementation(() => undefined);
 
-    expect(tab.getControlValue('isPropertyFieldHoverBreadcrumbEnabled')).toBe(false);
+    expect(tab.getControlValue('isPropertyFieldHoverBreadcrumbEnabled')).toBe(true);
     expect(tab.getControlValue('not-a-setting')).toBeUndefined();
 
     await tab.setControlValue('not-a-setting', true);
     await tab.setControlValue('isPropertyFieldHoverBreadcrumbEnabled', 'true');
     expect(editAndSave).not.toHaveBeenCalled();
 
-    await tab.setControlValue('isPropertyFieldHoverBreadcrumbEnabled', true);
-    expect(settings.isPropertyFieldHoverBreadcrumbEnabled).toBe(true);
+    await tab.setControlValue('isPropertyFieldHoverBreadcrumbEnabled', false);
+    expect(settings.isPropertyFieldHoverBreadcrumbEnabled).toBe(false);
     expect(editAndSave).toHaveBeenCalledTimes(1);
     expect(onSettingsChanged).toHaveBeenCalledTimes(1);
     expect(update).toHaveBeenCalledTimes(1);
+  });
+
+  it('should turn off only the mutually exclusive global counterpart when a state is enabled', async () => {
+    const { settings, tab } = createSettingTab();
+    settings.isGlobalCollapseAllNestedPropertiesEnabled = true;
+    await tab.setControlValue('isGlobalExpandAllNestedPropertiesEnabled', true);
+    expect(settings.isGlobalExpandAllNestedPropertiesEnabled).toBe(true);
+    expect(settings.isGlobalCollapseAllNestedPropertiesEnabled).toBe(false);
+
+    await tab.setControlValue('isGlobalExpandAllNestedPropertiesEnabled', false);
+    expect(settings.isGlobalCollapseAllNestedPropertiesEnabled).toBe(false);
+
+    settings.isGlobalExpandAllNestedPropertiesEnabled = true;
+    await tab.setControlValue('isGlobalCollapseAllNestedPropertiesEnabled', true);
+    expect(settings.isGlobalExpandAllNestedPropertiesEnabled).toBe(false);
+
+    settings.isGlobalExpandFullKeyNamesEnabled = true;
+    await tab.setControlValue('isGlobalCollapseFullKeyNamesEnabled', true);
+    expect(settings.isGlobalCollapseFullKeyNamesEnabled).toBe(true);
+    expect(settings.isGlobalExpandFullKeyNamesEnabled).toBe(false);
+
+    settings.isGlobalCollapseFullKeyNamesEnabled = true;
+    await tab.setControlValue('isGlobalExpandFullKeyNamesEnabled', true);
+    expect(settings.isGlobalCollapseFullKeyNamesEnabled).toBe(false);
+
+    await tab.setControlValue('isHighlightActivePropertyFieldTreeEnabled', true);
+    expect(settings.isHighlightActivePropertyFieldTreeEnabled).toBe(true);
   });
 });

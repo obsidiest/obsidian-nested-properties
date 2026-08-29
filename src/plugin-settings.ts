@@ -1,4 +1,6 @@
 export class PluginSettings {
+  public allNestedPropertiesExpansionStateByNote: Record<string, boolean> = {};
+  public fullKeyNamesExpansionStateByNote: Record<string, boolean> = {};
   public isActiveCursorPropertyFieldThreadingEnabled = false;
   public isActivePropertyFieldThreadingEnabled = true;
   public isActivePropertyFieldThreadingInHoverBreadcrumbEnabled = true;
@@ -13,9 +15,19 @@ export class PluginSettings {
   public isAllBranchesOfActiveRootLevelPropertyFieldTreeThreadingEnabled = false;
   public isAllBranchesOfActiveRootLevelPropertyFieldTreeThreadingInHoverBreadcrumbEnabled = true;
   public isAllBranchesOfActiveRootLevelPropertyFieldTreeThreadingInMainUiEnabled = true;
-  public isFullKeyDisplayEnabled = false;
+  public isFullWidthPropertyFieldHoverActivationEnabled = false;
+  public isFullWidthPropertyKeyHoverActivationEnabled = true;
+  public isGlobalCollapseAllNestedPropertiesEnabled = false;
+  public isGlobalCollapseFullKeyNamesEnabled = false;
+  public isGlobalExpandAllNestedPropertiesEnabled = true;
+  public isGlobalExpandFullKeyNamesEnabled = true;
+  public isGlobalToggleAllNestedPropertiesEnabled = true;
+  public isGlobalToggleFullKeyNamesEnabled = true;
+  public isHighlightActivePropertyFieldTreeEnabled = false;
   public isNestedPropertiesMainUiStaticTreeIndentationGuidesEnabled = true;
-  public isPropertyFieldHoverBreadcrumbEnabled = false;
+  public isPerNoteToggleAllNestedPropertiesEnabled = true;
+  public isPerNoteToggleFullKeyNamesEnabled = true;
+  public isPropertyFieldHoverBreadcrumbEnabled = true;
   public isPropertyFieldHoverBreadcrumbInLivePreviewEnabled = true;
   public isPropertyFieldHoverBreadcrumbInReadingModeEnabled = true;
   public isPropertyFieldHoverBreadcrumbInSourceModeEnabled = true;
@@ -23,4 +35,7 @@ export class PluginSettings {
   public isPropertyFieldThreadingEnabled = false;
   public isPropertyFieldThreadingInHoverBreadcrumbEnabled = true;
   public isPropertyFieldThreadingInMainUiEnabled = true;
+  public isRememberAllNestedPropertiesExpansionToggleStateEnabled = true;
+  public isRememberFullKeyNamesExpansionToggleStateEnabled = true;
+  public isRememberLastUsedMainUiToggleStatesEnabled = true;
 }

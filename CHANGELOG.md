@@ -1,7 +1,16 @@
 # CHANGELOG
 
-## 1.5.0
+## 2.0.0
 
+- fix: make nested object keys editable in Live Preview while keeping structural array indices read-only
+- fix: activate property threading across the full property key/value row, including Source-mode root and flattened fields
+- feat: add selectable full-field, full-key, and icon/expansion-toggle hover-breadcrumb activation scopes
+- fix: disambiguate repeated Source-mode YAML keys by their visible editor line so breadcrumbs retain the complete ancestry
+- fix: render enabled static guides and threading above hover-breadcrumb rows
+- feat: remember per-note Expand/Collapse All Nested Properties and full-key-name states across restarts
+- feat: add global and per-note controls for nested-property expansion and full key names, including disabled header-button states
+- feat: rename the full-key header action dynamically to Expand Full Key Names or Collapse Full Key Names
+- feat: add optional active property-tree highlighting with Style Settings controls
 - fix: render property visuals only after layout readiness and only for shown metadata editors, reusing unchanged tab renders and invalidating only the editor that changed
 - fix: build guide overlays off-DOM, prune collapsed descendants, cache computed Style Settings values, and batch expand/collapse-all redraws
 - fix: keep Style Settings precision controls dormant while their section is closed and remove the synchronous whole-workspace Style Settings parse during startup

@@ -24,10 +24,10 @@ export class Plugin extends PluginBase {
       })
     );
     this.pluginSettingsComponent = pluginSettingsComponent;
-    // Since obsidian-dev-utils 90 a child is loaded as it is added, so the settings' async load tail runs
-    // In parallel with the components added below instead of before them. The renderer reads
-    // `isFullKeyDisplayEnabled` in its synchronous `onload` and never re-reads it on the initial load, so
-    // Without this wait a stored `true` was read as its default `false` for the whole session.
+    // Since obsidian-dev-utils 90 a child is loaded as it is added, the settings' async load tail runs
+    // In parallel with the components added below instead of before them. The renderer derives each
+    // Note's initial header-toggle states during its synchronous load, so wait for persisted settings
+    // Before constructing it.
     await pluginSettingsComponent.loadWithPromises();
 
     const nestedPropertyRendererComponent = this.addChild(
@@ -45,8 +45,8 @@ export class Plugin extends PluginBase {
     this.addSettingTab(
       new NestedPropertiesPluginSettingTab({
         app: this.app,
-        onSettingsChanged: (): void => {
-          nestedPropertyRendererComponent.refreshSettings();
+        onSettingsChanged: (key, value): void => {
+          nestedPropertyRendererComponent.refreshSettings(key, value);
           propertyFieldVisualsComponent.refresh();
         },
         plugin: this,
@@ -69,7 +69,7 @@ export class Plugin extends PluginBase {
         nestedPropertyRendererComponent.toggleFullKeyDisplay();
       },
       id: 'toggle-full-key-display',
-      name: 'Toggle full key display'
+      name: 'Toggle full key names'
     });
     const nestedPropertyVaultOpsComponent = this.addChild(
       new NestedPropertyVaultOpsComponent({

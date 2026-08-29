@@ -28,6 +28,8 @@ const METADATA_CONTAINER_SELECTOR = '.metadata-container';
 
 type ViewMode = 'live-preview' | 'reading' | 'source';
 
+export type BreadcrumbActivationScope = 'field' | 'key' | 'toggle';
+
 interface ActiveDomField {
   container: HTMLElement;
   element: HTMLElement;
@@ -54,6 +56,8 @@ interface DocumentState {
   bodyStyleObserver: MutationObserver | null;
   cleanups: Array<() => void>;
   hideTimer: number | null;
+  hoveredBreadcrumbField: HTMLElement | null;
+  hoveredThreadingField: HTMLElement | null;
   mutationObserver: MutationObserver | null;
   popover: HTMLElement | null;
   renderFrame: number | null;
@@ -172,6 +176,7 @@ export class PropertyFieldVisualsComponent extends Component {
 
   private applyBodyClasses(ownerDocument: Document): void {
     const settings = this.pluginSettingsComponent.settings;
+    ownerDocument.body.classList.toggle('np-highlight-active-property-field-tree-enabled', settings.isHighlightActivePropertyFieldTreeEnabled);
     ownerDocument.body.classList.toggle('np-main-static-guides-enabled', settings.isNestedPropertiesMainUiStaticTreeIndentationGuidesEnabled);
     ownerDocument.body.classList.toggle('np-property-threading-enabled', settings.isPropertyFieldThreadingEnabled);
   }
@@ -191,6 +196,8 @@ export class PropertyFieldVisualsComponent extends Component {
       bodyStyleObserver: null,
       cleanups: [],
       hideTimer: null,
+      hoveredBreadcrumbField: null,
+      hoveredThreadingField: null,
       mutationObserver: null,
       popover: null,
       renderFrame: null,
@@ -200,7 +207,7 @@ export class PropertyFieldVisualsComponent extends Component {
     this.documentStates.set(ownerDocument, state);
     this.applyBodyClasses(ownerDocument);
 
-    this.listen(ownerDocument, state, 'pointerover', (event) => this.onPointerOver(ownerDocument, event));
+    this.listen(ownerDocument, state, 'pointermove', (event) => this.onPointerMove(ownerDocument, event));
     this.listen(ownerDocument, state, 'pointerout', (event) => this.onPointerOut(ownerDocument, event));
     this.listen(ownerDocument, state, 'focusin', (event) => this.onFocusIn(ownerDocument, event));
     this.listen(ownerDocument, state, 'focusout', (event) => this.onFocusOut(ownerDocument, event));
@@ -276,7 +283,7 @@ export class PropertyFieldVisualsComponent extends Component {
     state.cleanups.push(() => ownerDocument.removeEventListener(type, listener));
   }
 
-  private onPointerOver(ownerDocument: Document, event: PointerEvent): void {
+  private onPointerMove(ownerDocument: Document, event: PointerEvent): void {
     const target = event.target;
     if (!(target instanceof ownerDocument.defaultView!.Element)) {
       return;
@@ -290,75 +297,166 @@ export class PropertyFieldVisualsComponent extends Component {
       return;
     }
 
-    const fieldTarget = target.closest<HTMLElement>('.metadata-property-key, .metadata-property-value');
-    const propertyElement = fieldTarget?.closest<HTMLElement>('.metadata-property') ?? null;
-    const metadataContainer = propertyElement?.closest<HTMLElement>('.metadata-container') ?? null;
+    const isHoverThreadingEnabled = this.isMainThreadingEnabled() && !this.pluginSettingsComponent.settings.isActiveCursorPropertyFieldThreadingEnabled;
+    const propertyElement = resolveDomPropertyAtPointer(target, event.clientY);
+    const metadataContainer = propertyElement?.closest<HTMLElement>(METADATA_CONTAINER_SELECTOR) ?? null;
     if (propertyElement !== null && metadataContainer !== null) {
-      const mode = detectViewMode(propertyElement);
-      const isBreadcrumbEnabled = this.isBreadcrumbEnabled(mode);
-      const isHoverThreadingEnabled = this.isMainThreadingEnabled() && !this.pluginSettingsComponent.settings.isActiveCursorPropertyFieldThreadingEnabled;
-      if (!isBreadcrumbEnabled && !isHoverThreadingEnabled) {
-        return;
-      }
-      const roots = buildPropertyFieldForest(metadataContainer);
-      const node = flattenPropertyFieldForest(roots).find((candidate) => candidate.element === propertyElement);
-      if (node === undefined) {
-        return;
-      }
-      if (isBreadcrumbEnabled) {
-        this.showDomBreadcrumb(ownerDocument, roots, node, fieldTarget ?? propertyElement);
-      }
-      if (isHoverThreadingEnabled) {
-        state.active = { container: metadataContainer, element: propertyElement, kind: 'dom' };
-        this.scheduleRender(ownerDocument);
-      }
+      const isBreadcrumbEnabled = this.isBreadcrumbEnabled(detectViewMode(propertyElement));
+      const breadcrumbElement = isBreadcrumbEnabled ? resolveDomBreadcrumbPropertyAtPointer(target, event.clientY, this.getBreadcrumbActivationScope()) : null;
+      this.updateDomPointerActivation(ownerDocument, state, metadataContainer, breadcrumbElement, isHoverThreadingEnabled ? propertyElement : null);
       return;
     }
 
-    const sourceLine = target.closest<HTMLElement>('.cm-line');
+    const sourceLine = resolveSourceLineElementAtPointer(target, event.clientY);
     if (sourceLine === null || detectViewMode(sourceLine) !== 'source') {
+      this.clearPointerActivation(ownerDocument);
       return;
     }
     const isBreadcrumbEnabled = this.isBreadcrumbEnabled('source');
-    const isHoverThreadingEnabled = this.pluginSettingsComponent.settings.isPropertyFieldThreadingEnabled && !this.pluginSettingsComponent.settings.isActiveCursorPropertyFieldThreadingEnabled;
     if (!isBreadcrumbEnabled && !isHoverThreadingEnabled) {
+      this.clearPointerActivation(ownerDocument);
+      return;
+    }
+    const breadcrumbLine = isBreadcrumbEnabled ? resolveSourceBreadcrumbLineAtPointer(target, event.clientX, event.clientY, this.getBreadcrumbActivationScope()) : null;
+    const threadingLine = isHoverThreadingEnabled ? sourceLine : null;
+    if (breadcrumbLine === null && threadingLine === null) {
+      this.clearPointerActivation(ownerDocument);
+      return;
+    }
+    const isBreadcrumbStable = state.hoveredBreadcrumbField === breadcrumbLine && (breadcrumbLine === null || state.popover !== null);
+    const isThreadingStable = state.hoveredThreadingField === threadingLine && (threadingLine === null || (state.active?.kind === 'source' && state.sourceHighlight === threadingLine));
+    if (isBreadcrumbStable && isThreadingStable) {
+      if (breadcrumbLine !== null) {
+        this.cancelPopoverHide(ownerDocument);
+      }
       return;
     }
     const sourceTarget = this.resolveSourceTarget(sourceLine);
     if (sourceTarget === null) {
+      this.clearPointerActivation(ownerDocument);
       return;
     }
-    if (isBreadcrumbEnabled) {
-      this.showSourceBreadcrumb(ownerDocument, sourceTarget.roots, sourceTarget.node, sourceLine, sourceTarget.view);
-    }
-    if (isHoverThreadingEnabled) {
-      state.active = { kind: 'source', line: sourceTarget.node.line, roots: sourceTarget.roots, view: sourceTarget.view };
-      this.highlightSourceLine(ownerDocument, sourceLine);
-    }
+    this.updateSourcePointerActivation(ownerDocument, state, sourceTarget, breadcrumbLine, threadingLine);
   }
 
   private onPointerOut(ownerDocument: Document, event: PointerEvent): void {
-    const target = event.target;
-    if (!(target instanceof ownerDocument.defaultView!.Element)) {
-      return;
-    }
     const related = event.relatedTarget;
-    if (related instanceof ownerDocument.defaultView!.Node && (target.contains(related) || (related.instanceOf(ownerDocument.defaultView!.Element) && related.closest('.np-property-breadcrumb-popover') !== null))) {
+    if (related instanceof ownerDocument.defaultView!.Node) {
       return;
     }
-    if (target.closest('.metadata-property-key, .metadata-property-value, .cm-line, .np-property-breadcrumb-popover') === null) {
-      return;
-    }
+    this.clearPointerActivation(ownerDocument);
+  }
+
+  private clearPointerActivation(ownerDocument: Document): void {
     const state = this.documentStates.get(ownerDocument);
-    if (state?.popover !== null && state?.popover !== undefined) {
+    if (state === undefined) {
+      return;
+    }
+    const hadBreadcrumbTarget = state.hoveredBreadcrumbField !== null;
+    state.hoveredBreadcrumbField = null;
+    if (hadBreadcrumbTarget && state.popover !== null) {
       this.schedulePopoverHide(ownerDocument);
     }
-    if (!this.pluginSettingsComponent.settings.isActiveCursorPropertyFieldThreadingEnabled && state?.active !== null && state?.active !== undefined) {
-      const shouldRender = state.active.kind === 'dom';
-      state.active = null;
-      state.sourceHighlight?.classList.remove('np-property-field-source-highlight');
-      state.sourceHighlight = null;
-      if (shouldRender) {
+    this.clearHoverThreading(ownerDocument, state);
+  }
+
+  private clearHoverThreading(ownerDocument: Document, state: DocumentState): void {
+    state.hoveredThreadingField = null;
+    if (this.pluginSettingsComponent.settings.isActiveCursorPropertyFieldThreadingEnabled || state.active === null) {
+      return;
+    }
+    const shouldRender = state.active.kind === 'dom';
+    state.active = null;
+    state.sourceHighlight?.classList.remove('np-property-field-source-highlight');
+    state.sourceHighlight = null;
+    if (shouldRender) {
+      this.scheduleRender(ownerDocument);
+    }
+  }
+
+  private updateDomPointerActivation(ownerDocument: Document, state: DocumentState, metadataContainer: HTMLElement, breadcrumbElement: HTMLElement | null, threadingElement: HTMLElement | null): void {
+    const isBreadcrumbChanged = state.hoveredBreadcrumbField !== breadcrumbElement;
+    const isThreadingChanged = state.hoveredThreadingField !== threadingElement || (threadingElement !== null && (state.active?.kind !== 'dom' || state.active.element !== threadingElement));
+    const needsBreadcrumb = breadcrumbElement !== null && (isBreadcrumbChanged || state.popover === null);
+    const needsTree = needsBreadcrumb || (threadingElement !== null && isThreadingChanged);
+    const roots = needsTree ? buildPropertyFieldForest(metadataContainer) : [];
+    const nodes = needsTree ? flattenPropertyFieldForest(roots) : [];
+    const breadcrumbNode = breadcrumbElement === null ? undefined : nodes.find((candidate) => candidate.element === breadcrumbElement);
+    const threadingNode = threadingElement === null ? undefined : nodes.find((candidate) => candidate.element === threadingElement);
+
+    if (isBreadcrumbChanged) {
+      state.hoveredBreadcrumbField = breadcrumbNode === undefined ? null : breadcrumbElement;
+      if (breadcrumbNode === undefined) {
+        if (state.popover !== null) {
+          this.schedulePopoverHide(ownerDocument);
+        }
+      } else if (breadcrumbElement !== null) {
+        const anchor = breadcrumbElement.querySelector<HTMLElement>(':scope > .metadata-property-key') ?? breadcrumbElement;
+        this.showDomBreadcrumb(ownerDocument, roots, breadcrumbNode, anchor);
+      }
+    } else if (needsBreadcrumb && breadcrumbNode !== undefined && breadcrumbElement !== null) {
+      const anchor = breadcrumbElement.querySelector<HTMLElement>(':scope > .metadata-property-key') ?? breadcrumbElement;
+      this.showDomBreadcrumb(ownerDocument, roots, breadcrumbNode, anchor);
+    } else if (breadcrumbElement !== null) {
+      this.cancelPopoverHide(ownerDocument);
+    }
+
+    if (threadingElement === null) {
+      if (state.hoveredThreadingField !== null) {
+        this.clearHoverThreading(ownerDocument, state);
+      }
+      return;
+    }
+    if (!isThreadingChanged) {
+      return;
+    }
+    if (threadingNode === undefined) {
+      this.clearHoverThreading(ownerDocument, state);
+      return;
+    }
+    state.hoveredThreadingField = threadingElement;
+    state.sourceHighlight?.classList.remove('np-property-field-source-highlight');
+    state.sourceHighlight = null;
+    state.active = { container: metadataContainer, element: threadingElement, kind: 'dom' };
+    this.scheduleRender(ownerDocument);
+  }
+
+  private updateSourcePointerActivation(
+    ownerDocument: Document,
+    state: DocumentState,
+    sourceTarget: { node: SourcePropertyFieldNode; roots: SourcePropertyFieldNode[]; view: MarkdownView },
+    breadcrumbLine: HTMLElement | null,
+    threadingLine: HTMLElement | null
+  ): void {
+    const isBreadcrumbChanged = state.hoveredBreadcrumbField !== breadcrumbLine;
+    if (isBreadcrumbChanged) {
+      state.hoveredBreadcrumbField = breadcrumbLine;
+      if (breadcrumbLine === null) {
+        if (state.popover !== null) {
+          this.schedulePopoverHide(ownerDocument);
+        }
+      } else {
+        this.showSourceBreadcrumb(ownerDocument, sourceTarget.roots, sourceTarget.node, breadcrumbLine, sourceTarget.view);
+      }
+    } else if (breadcrumbLine !== null && state.popover === null) {
+      this.showSourceBreadcrumb(ownerDocument, sourceTarget.roots, sourceTarget.node, breadcrumbLine, sourceTarget.view);
+    } else if (breadcrumbLine !== null) {
+      this.cancelPopoverHide(ownerDocument);
+    }
+
+    if (threadingLine === null) {
+      if (state.hoveredThreadingField !== null) {
+        this.clearHoverThreading(ownerDocument, state);
+      }
+      return;
+    }
+    const isThreadingChanged = state.hoveredThreadingField !== threadingLine || state.active?.kind !== 'source' || state.active.line !== sourceTarget.node.line;
+    if (isThreadingChanged) {
+      const shouldClearDomOverlay = state.active?.kind === 'dom';
+      state.hoveredThreadingField = threadingLine;
+      state.active = { kind: 'source', line: sourceTarget.node.line, roots: sourceTarget.roots, view: sourceTarget.view };
+      this.highlightSourceLine(ownerDocument, threadingLine);
+      if (shouldClearDomOverlay) {
         this.scheduleRender(ownerDocument);
       }
     }
@@ -408,7 +506,7 @@ export class PropertyFieldVisualsComponent extends Component {
 
   private onEditorCursorChanged(ownerDocument: Document): void {
     const settings = this.pluginSettingsComponent.settings;
-    if (!settings.isPropertyFieldThreadingEnabled || !settings.isActiveCursorPropertyFieldThreadingEnabled) {
+    if (!this.isMainThreadingEnabled() || !settings.isActiveCursorPropertyFieldThreadingEnabled) {
       return;
     }
     const view = this.findMarkdownView(ownerDocument, ownerDocument.activeElement);
@@ -424,6 +522,12 @@ export class PropertyFieldVisualsComponent extends Component {
       return;
     }
     state.active = node === null ? null : { kind: 'source', line: node.line, roots, view };
+    if (node === null) {
+      state.sourceHighlight?.classList.remove('np-property-field-source-highlight');
+      state.sourceHighlight = null;
+    } else {
+      this.highlightVisibleSourceLine(ownerDocument, view, node.line);
+    }
     if (state.popover !== null && node !== null) {
       this.showSourceBreadcrumb(ownerDocument, roots, node, ownerDocument.activeElement instanceof HTMLElement ? ownerDocument.activeElement : view.containerEl, view);
     }
@@ -619,10 +723,11 @@ export class PropertyFieldVisualsComponent extends Component {
 
   private showDomBreadcrumb(ownerDocument: Document, roots: PropertyFieldNode[], current: PropertyFieldNode, anchor: HTMLElement): void {
     const settings = this.pluginSettingsComponent.settings;
+    const isBreadcrumbThreadingEnabled = settings.isPropertyFieldThreadingEnabled && settings.isPropertyFieldThreadingInHoverBreadcrumbEnabled;
     const root = getPropertyFieldRoot(current);
-    const nodes = settings.isAllBranchesOfActiveRootLevelPropertyFieldTreeThreadingEnabled && settings.isAllBranchesOfActiveRootLevelPropertyFieldTreeThreadingInHoverBreadcrumbEnabled
+    const nodes = isBreadcrumbThreadingEnabled && settings.isActiveRootLevelPropertyFieldTreeThreadingEnabled && settings.isAllBranchesOfActiveRootLevelPropertyFieldTreeThreadingEnabled && settings.isAllBranchesOfActiveRootLevelPropertyFieldTreeThreadingInHoverBreadcrumbEnabled
       ? flattenPropertyFieldForest(roots)
-      : settings.isAllBranchesOfActivePropertyFieldTreeThreadingEnabled && settings.isAllBranchesOfActivePropertyFieldTreeThreadingInHoverBreadcrumbEnabled
+      : isBreadcrumbThreadingEnabled && settings.isAllBranchesOfActivePropertyFieldTreeThreadingEnabled && settings.isAllBranchesOfActivePropertyFieldTreeThreadingInHoverBreadcrumbEnabled
       ? flattenPropertyFieldForest([root])
       : getPropertyFieldAncestors(current);
     const entries = createBreadcrumbEntries(nodes, current);
@@ -648,10 +753,11 @@ export class PropertyFieldVisualsComponent extends Component {
 
   private showSourceBreadcrumb(ownerDocument: Document, roots: SourcePropertyFieldNode[], current: SourcePropertyFieldNode, anchor: HTMLElement, view: MarkdownView): void {
     const settings = this.pluginSettingsComponent.settings;
+    const isBreadcrumbThreadingEnabled = settings.isPropertyFieldThreadingEnabled && settings.isPropertyFieldThreadingInHoverBreadcrumbEnabled;
     const root = getPropertyFieldRoot(current);
-    const nodes = settings.isAllBranchesOfActiveRootLevelPropertyFieldTreeThreadingEnabled && settings.isAllBranchesOfActiveRootLevelPropertyFieldTreeThreadingInHoverBreadcrumbEnabled
+    const nodes = isBreadcrumbThreadingEnabled && settings.isActiveRootLevelPropertyFieldTreeThreadingEnabled && settings.isAllBranchesOfActiveRootLevelPropertyFieldTreeThreadingEnabled && settings.isAllBranchesOfActiveRootLevelPropertyFieldTreeThreadingInHoverBreadcrumbEnabled
       ? flattenPropertyFieldForest(roots)
-      : settings.isAllBranchesOfActivePropertyFieldTreeThreadingEnabled && settings.isAllBranchesOfActivePropertyFieldTreeThreadingInHoverBreadcrumbEnabled
+      : isBreadcrumbThreadingEnabled && settings.isAllBranchesOfActivePropertyFieldTreeThreadingEnabled && settings.isAllBranchesOfActivePropertyFieldTreeThreadingInHoverBreadcrumbEnabled
       ? flattenPropertyFieldForest([root])
       : getPropertyFieldAncestors(current);
     this.showBreadcrumb(ownerDocument, createBreadcrumbEntries(nodes, current), anchor, (node) => {
@@ -731,6 +837,7 @@ export class PropertyFieldVisualsComponent extends Component {
     svg.setAttribute('aria-hidden', 'true');
     svg.setAttribute('width', String(tree.scrollWidth));
     svg.setAttribute('height', String(tree.scrollHeight));
+    svg.setAttribute('viewBox', `0 0 ${String(tree.scrollWidth)} ${String(tree.scrollHeight)}`);
     tree.prepend(svg);
     const metrics = new Map<T, Point>();
     const readNumber = createCssNumberReader(tree);
@@ -758,7 +865,7 @@ export class PropertyFieldVisualsComponent extends Component {
       return;
     }
     const currentRoot = getPropertyFieldRoot(current);
-    if (settings.isAllBranchesOfActiveRootLevelPropertyFieldTreeThreadingEnabled && settings.isAllBranchesOfActiveRootLevelPropertyFieldTreeThreadingInHoverBreadcrumbEnabled) {
+    if (settings.isActiveRootLevelPropertyFieldTreeThreadingEnabled && settings.isAllBranchesOfActiveRootLevelPropertyFieldTreeThreadingEnabled && settings.isAllBranchesOfActiveRootLevelPropertyFieldTreeThreadingInHoverBreadcrumbEnabled) {
       this.drawForest(svg, roots, metrics, 'np-property-thread-root-all', readNumber);
     } else if (settings.isAllBranchesOfActivePropertyFieldTreeThreadingEnabled && settings.isAllBranchesOfActivePropertyFieldTreeThreadingInHoverBreadcrumbEnabled) {
       this.drawForest(svg, [currentRoot], metrics, 'np-property-thread-all', readNumber);
@@ -852,6 +959,11 @@ export class PropertyFieldVisualsComponent extends Component {
       : settings.isPropertyFieldHoverBreadcrumbInReadingModeEnabled);
   }
 
+  private getBreadcrumbActivationScope(): BreadcrumbActivationScope {
+    const settings = this.pluginSettingsComponent.settings;
+    return resolveBreadcrumbActivationScope(settings.isFullWidthPropertyFieldHoverActivationEnabled, settings.isFullWidthPropertyKeyHoverActivationEnabled);
+  }
+
   private isMainThreadingEnabled(): boolean {
     const settings = this.pluginSettingsComponent.settings;
     return settings.isPropertyFieldThreadingEnabled && settings.isPropertyFieldThreadingInMainUiEnabled;
@@ -890,7 +1002,8 @@ export class PropertyFieldVisualsComponent extends Component {
   }
 
   private highlightVisibleSourceLine(ownerDocument: Document, view: MarkdownView, lineNumber: number): void {
-    const sourceLine = Array.from(view.containerEl.querySelectorAll<HTMLElement>('.cm-line')).find((line) => resolveSourceLine(line, view.editor.getValue(), lineNumber) === lineNumber);
+    const source = view.editor.getValue();
+    const sourceLine = Array.from(view.containerEl.querySelectorAll<HTMLElement>('.cm-line')).find((line) => resolveSourceLine(line, source, lineNumber) === lineNumber);
     if (sourceLine !== undefined) {
       this.highlightSourceLine(ownerDocument, sourceLine);
     }
@@ -1081,7 +1194,192 @@ function removeVisualArtifacts(ownerDocument: Document): void {
   }
 }
 
-function resolveSourceLine(lineElement: HTMLElement, source: string, preferredLine: number): number {
+export function resolveDomPropertyAtPointer(target: Element, clientY: number): HTMLElement | null {
+  const directProperty = target.closest<HTMLElement>('.metadata-property');
+  if (directProperty !== null) {
+    return directProperty;
+  }
+  const container = target.closest<HTMLElement>(METADATA_CONTAINER_SELECTOR);
+  if (container === null) {
+    return null;
+  }
+  const nodes = flattenVisiblePropertyFieldForest(buildPropertyFieldForest(container));
+  const keyElements = nodes.map((node) => node.keyElement);
+  const keyElement = findElementAtClientY(keyElements, clientY);
+  const index = keyElement === null ? -1 : keyElements.indexOf(keyElement);
+  return index < 0 ? null : nodes[index]?.element ?? null;
+}
+
+export function resolveBreadcrumbActivationScope(isFullFieldEnabled: boolean, isFullKeyEnabled: boolean): BreadcrumbActivationScope {
+  if (isFullFieldEnabled) {
+    return 'field';
+  }
+  return isFullKeyEnabled ? 'key' : 'toggle';
+}
+
+export function resolveDomBreadcrumbPropertyAtPointer(target: Element, clientY: number, scope: BreadcrumbActivationScope): HTMLElement | null {
+  if (scope === 'field') {
+    return resolveDomPropertyAtPointer(target, clientY);
+  }
+  const activationElement = scope === 'key'
+    ? target.closest<HTMLElement>('.metadata-property-key')
+    : target.closest<HTMLElement>('.metadata-property-icon, .nested-properties-collapse-btn');
+  return activationElement?.closest<HTMLElement>('.metadata-property') ?? null;
+}
+
+export function resolveSourceLineElementAtPointer(target: Element, clientY: number): HTMLElement | null {
+  const directLine = target.closest<HTMLElement>('.cm-line');
+  if (directLine !== null) {
+    return directLine;
+  }
+  const sourceView = target.closest<HTMLElement>('.markdown-source-view.mod-cm6');
+  return sourceView === null ? null : findElementAtClientY(Array.from(sourceView.querySelectorAll<HTMLElement>('.cm-line')), clientY);
+}
+
+export function resolveSourceBreadcrumbLineAtPointer(target: Element, clientX: number, clientY: number, scope: BreadcrumbActivationScope): HTMLElement | null {
+  if (scope === 'field') {
+    return resolveSourceLineElementAtPointer(target, clientY);
+  }
+  if (scope === 'toggle') {
+    return resolveSourceFoldToggleLineAtPointer(target, clientY);
+  }
+  const line = resolveSourceLineElementAtPointer(target, clientY);
+  return line !== null && isClientXWithinSourceKey(line, clientX) ? line : null;
+}
+
+export function getSourceKeyCharacterRange(text: string): null | { end: number; start: number } {
+  let start = 0;
+  while (/\s/u.test(text[start] ?? '')) {
+    start += 1;
+  }
+  if (text[start] === '-') {
+    const sequenceStart = start;
+    start += 1;
+    while (/\s/u.test(text[start] ?? '')) {
+      start += 1;
+    }
+    if (start >= text.length) {
+      return { end: sequenceStart + 1, start: sequenceStart };
+    }
+    const mappingColon = findYamlMappingColon(text, start);
+    return mappingColon === -1 ? { end: sequenceStart + 1, start: sequenceStart } : { end: mappingColon + 1, start };
+  }
+  const mappingColon = findYamlMappingColon(text, start);
+  return mappingColon === -1 ? null : { end: mappingColon + 1, start };
+}
+
+function findYamlMappingColon(text: string, start: number): number {
+  let bracketDepth = 0;
+  let quote: '"' | '\'' | null = null;
+  for (let index = start; index < text.length; index++) {
+    const character = text[index];
+    if (quote !== null) {
+      if (character === quote && (quote === '\'' || text[index - 1] !== '\\')) {
+        quote = null;
+      }
+      continue;
+    }
+    switch (character) {
+      case ':': {
+        if (bracketDepth === 0) {
+          return index;
+        }
+        break;
+      }
+      case '\'':
+      case '"': {
+        quote = character;
+        break;
+      }
+      case '[':
+      case '{': {
+        bracketDepth += 1;
+        break;
+      }
+      case ']':
+      case '}': {
+        bracketDepth = Math.max(0, bracketDepth - 1);
+        break;
+      }
+      default: {
+        break;
+      }
+    }
+  }
+  return -1;
+}
+
+function isClientXWithinSourceKey(line: HTMLElement, clientX: number): boolean {
+  const characterRange = getSourceKeyCharacterRange(line.textContent ?? '');
+  if (characterRange === null) {
+    return false;
+  }
+  const range = createTextRange(line, characterRange.start, characterRange.end);
+  if (range === null) {
+    return false;
+  }
+  const rects = typeof range.getClientRects === 'function' ? Array.from(range.getClientRects()) : [];
+  if (rects.length > 0) {
+    return rects.some((rect) => rect.width > 0 && clientX >= rect.left && clientX <= rect.right);
+  }
+  const rect = range.getBoundingClientRect();
+  return rect.width > 0 && clientX >= rect.left && clientX <= rect.right;
+}
+
+function createTextRange(element: HTMLElement, start: number, end: number): Range | null {
+  const range = element.ownerDocument.createRange();
+  const win = element.ownerDocument.defaultView;
+  if (win === null) {
+    return null;
+  }
+  const walker = element.ownerDocument.createTreeWalker(element, win.NodeFilter.SHOW_TEXT);
+  let characterOffset = 0;
+  let startNode: Node | null = null;
+  let startOffset = 0;
+  let endNode: Node | null = null;
+  let endOffset = 0;
+  for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
+    const length = node.textContent?.length ?? 0;
+    if (startNode === null && start <= characterOffset + length) {
+      startNode = node;
+      startOffset = Math.max(0, start - characterOffset);
+    }
+    if (end <= characterOffset + length) {
+      endNode = node;
+      endOffset = Math.max(0, end - characterOffset);
+      break;
+    }
+    characterOffset += length;
+  }
+  if (startNode === null || endNode === null) {
+    return null;
+  }
+  range.setStart(startNode, startOffset);
+  range.setEnd(endNode, endOffset);
+  return range;
+}
+
+function resolveSourceFoldToggleLineAtPointer(target: Element, clientY: number): HTMLElement | null {
+  const directToggle = target.closest<HTMLElement>('.collapse-indicator, .cm-foldMarker, .cm-fold-indicator, [aria-label*="fold" i]');
+  if (directToggle !== null) {
+    return resolveSourceLineElementAtPointer(directToggle, clientY);
+  }
+  const gutterElement = target.closest<HTMLElement>('.cm-foldGutter .cm-gutterElement');
+  if (gutterElement === null || (gutterElement.childNodes.length === 0 && gutterElement.textContent?.trim() === '')) {
+    return null;
+  }
+  return resolveSourceLineElementAtPointer(gutterElement, clientY);
+}
+
+export function findElementAtClientY(elements: readonly HTMLElement[], clientY: number): HTMLElement | null {
+  const candidates = elements
+    .map((element) => ({ element, rect: element.getBoundingClientRect() }))
+    .filter(({ rect }) => rect.height > 0 && clientY >= rect.top && clientY <= rect.bottom)
+    .sort((left, right) => left.rect.height - right.rect.height);
+  return candidates[0]?.element ?? null;
+}
+
+export function resolveSourceLine(lineElement: HTMLElement, source: string, preferredLine: number): number {
   const explicitLine = Number(lineElement.dataset['line']);
   if (Number.isSafeInteger(explicitLine) && explicitLine >= 0) {
     return explicitLine;
@@ -1090,11 +1388,38 @@ function resolveSourceLine(lineElement: HTMLElement, source: string, preferredLi
   const sourceLines = source.split(/\r?\n/u);
   const candidates: number[] = [];
   for (const [index, line] of sourceLines.entries()) {
-    if (line === text || line.trim() === text.trim()) {
+    if (getSourceLineMatchScore(line, text) > 0) {
       candidates.push(index);
     }
   }
-  return candidates.sort((left, right) => Math.abs(left - preferredLine) - Math.abs(right - preferredLine))[0] ?? preferredLine;
+  if (candidates.length <= 1) {
+    return candidates[0] ?? preferredLine;
+  }
+  const content = lineElement.closest('.cm-content');
+  const visibleLines = content === null ? [lineElement] : Array.from(content.querySelectorAll<HTMLElement>('.cm-line'));
+  const targetIndex = visibleLines.indexOf(lineElement);
+  const scoredCandidates = candidates.map((candidate) => {
+    let score = 0;
+    for (let offset = -6; offset <= 6; offset++) {
+      const visibleLine = visibleLines[targetIndex + offset];
+      const sourceLine = sourceLines[candidate + offset];
+      if (visibleLine === undefined || sourceLine === undefined) {
+        continue;
+      }
+      const distanceWeight = 7 - Math.abs(offset);
+      score += getSourceLineMatchScore(sourceLine, visibleLine.textContent ?? '') * distanceWeight;
+    }
+    return { candidate, score };
+  });
+  scoredCandidates.sort((left, right) => right.score - left.score || Math.abs(left.candidate - preferredLine) - Math.abs(right.candidate - preferredLine));
+  return scoredCandidates[0]?.candidate ?? preferredLine;
+}
+
+function getSourceLineMatchScore(sourceLine: string, visibleLine: string): number {
+  if (sourceLine === visibleLine) {
+    return 3;
+  }
+  return sourceLine.trim() === visibleLine.trim() ? 1 : 0;
 }
 
 /* eslint-enable @typescript-eslint/array-type, @typescript-eslint/no-confusing-void-expression, @typescript-eslint/no-non-null-assertion, @typescript-eslint/no-unnecessary-condition, @typescript-eslint/restrict-template-expressions, complexity, import-x/consistent-type-specifier-style, no-magic-numbers, no-restricted-syntax, obsidian-dev-utils/params-options-name-match, obsidian-dev-utils/readonly-params-options-result-members, perfectionist/sort-classes, perfectionist/sort-modules, perfectionist/sort-union-types, unicorn/consistent-boolean-name, unicorn/no-array-callback-reference, unicorn/no-nested-ternary, unicorn/no-unnecessary-nested-ternary, unicorn/prefer-spread -- Restore repository DOM rules. */

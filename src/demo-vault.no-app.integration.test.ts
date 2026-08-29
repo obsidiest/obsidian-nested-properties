@@ -13,7 +13,7 @@ registerDemoVaultCoverageSuite({
   interfaces: [],
   nonTrivialGuard: {
     expectDemoNote: '08 Full key display.md',
-    expectMember: 'isFullKeyDisplayEnabled',
+    expectMember: 'isRememberFullKeyNamesExpansionToggleStateEnabled',
     interfaceName: 'PluginSettings',
     sourcePath: 'src/plugin-settings.ts'
   },

@@ -4,25 +4,25 @@ metadata:
   anotherRatherLongNestedKeyThatAlsoGetsTruncatedWhenSpaceIsTight: value
   short: ok
 ---
-# Full key display
+# Full key names
 
-By default, long keys are **truncated with a trailing ellipsis** to save space - both plain top-level keys (like `aVeryLongPropertyKeyName…` above) and nested ones. The **Toggle full key display** command (and the matching button in the Properties header) switches keys to their full text, widening each field and scrolling horizontally where needed.
+Long keys can either be expanded to their full text or collapsed with a trailing ellipsis to save space. This applies to both plain top-level keys and nested keys. Full key names are expanded by default.
 
 ## Try it
 
-1. Look at the long keys above - they are truncated by default.
-2. Click the **Toggle full key display** button in the Properties header (the wrap-text icon next to the collapse/expand-all button), or run the **Toggle full key display** command.
-3. The keys expand to their full text; toggle again to go back. The choice is remembered across restarts.
+1. Look at the long keys above; they are expanded by default.
+2. Click **Collapse Full Key Names** in the Properties header (the wrap-text icon next to the collapse/expand-all button), or run the **Toggle full key names** command.
+3. The keys truncate; the same button is now named **Expand Full Key Names**. Toggle again to restore the full text.
 
-The toggle state is persisted in the plugin setting `isFullKeyDisplayEnabled` (saved to the plugin's `data.json`), so it survives restarts.
+With **Remember Last Used Main UI Toggle States** and **Remember Full Key Names Expansion Toggle State** enabled, the per-note choice is saved in `fullKeyNamesExpansionStateByNote` and survives restarts. The global and per-note controls can be configured independently in the plugin settings.
 
 ## Switch it with a button
 
-The block below toggles full key display for you. Manual equivalent: use the header button or the command palette as described above.
+The block below toggles full key names for you. Manual equivalent: use the header button or the command palette as described above.
 
 ```code-button
 ---
-caption: Toggle full key display
+caption: Toggle full key names
 ---
 require('/demoSetup.ts').toggleFullKeyDisplay(app);
 ```
