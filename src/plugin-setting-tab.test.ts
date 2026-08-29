@@ -32,6 +32,7 @@ interface TestControl {
 }
 
 interface TestDefinition {
+  heading?: string;
   items?: TestItem[];
 }
 
@@ -40,6 +41,11 @@ interface TestItem {
   control?: TestControl;
   desc?: string;
   name?: string;
+  render?(setting: TestSetting): void;
+}
+
+interface TestSetting {
+  setHeading(): void;
 }
 
 function createSettingTab(): SettingTabFixture {
@@ -75,6 +81,12 @@ describe('NestedPropertiesPluginSettingTab', () => {
     expect(definitions).toHaveLength(5);
     expect(new Set(controls.map((control) => control.key))).toEqual(new Set(booleanKeys));
     expect(items.every((item) => item.aliases !== undefined && item.aliases.length > 0 && item.desc !== undefined && item.name !== undefined)).toBe(true);
+    expect(items.map((item) => item.name)).toContain('Property Field Hover Breadcrumb Activation Scope');
+    expect(items.map((item) => item.name)).toContain('Main UI Property Field Threading');
+    expect(items.map((item) => item.name)).toContain('Hover Breadcrumb Property Field Threading');
+    const setHeading = vi.fn();
+    items.find((item) => item.name === 'Property Field Hover Breadcrumb Activation Scope')?.render?.({ setHeading });
+    expect(setHeading).toHaveBeenCalledTimes(1);
   });
 
   it('should make surface, feature, global, and remember controls genuinely superordinate', () => {

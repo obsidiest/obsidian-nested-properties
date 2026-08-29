@@ -9,6 +9,7 @@ import {
 import type { PropertyFieldNode } from './property-field-tree.ts';
 
 import {
+  applyRedoFallback,
   buildRoundedPath,
   createCssNumberReader,
   findElementAtClientY,
@@ -21,6 +22,7 @@ import {
   isContainerRenderCurrent,
   isPropertyFieldMutation,
   isPropertyVisualStyleMutation,
+  isRedoShortcut,
   resolveBreadcrumbActivationScope,
   resolveDomBreadcrumbPropertyAtPointer,
   resolveDomPropertyAtPointer,
@@ -120,12 +122,13 @@ describe('property field visual render guards', () => {
     const property = container.createDiv({ cls: 'metadata-property' });
     const key = property.createDiv({ cls: 'metadata-property-key', text: 'Key' });
     const value = property.createDiv({ cls: 'metadata-property-value', text: 'Value' });
-    vi.spyOn(key, 'getBoundingClientRect').mockReturnValue({ bottom: 40, height: 20, top: 20 } as DOMRect);
+    vi.spyOn(key, 'getBoundingClientRect').mockReturnValue({ bottom: 40, height: 20, left: 10, right: 250, top: 20, width: 240 } as DOMRect);
+    vi.spyOn(value, 'getBoundingClientRect').mockReturnValue({ bottom: 40, height: 20, left: 250, right: 900, top: 20, width: 650 } as DOMRect);
 
-    expect(resolveDomPropertyAtPointer(key, 30)).toBe(property);
-    expect(resolveDomPropertyAtPointer(value, 30)).toBe(property);
-    expect(resolveDomPropertyAtPointer(container, 30)).toBe(property);
-    expect(resolveDomPropertyAtPointer(container, 50)).toBeNull();
+    expect(resolveDomPropertyAtPointer(key, 20, 30)).toBe(property);
+    expect(resolveDomPropertyAtPointer(value, 500, 30)).toBe(property);
+    expect(resolveDomPropertyAtPointer(container, 800, 30)).toBe(property);
+    expect(resolveDomPropertyAtPointer(container, 800, 50)).toBeNull();
     container.remove();
   });
 
@@ -136,15 +139,16 @@ describe('property field visual render guards', () => {
     const icon = key.createDiv({ cls: 'metadata-property-icon' });
     const collapse = key.createDiv({ cls: 'nested-properties-collapse-btn' });
     const value = property.createDiv({ cls: 'metadata-property-value' });
-    vi.spyOn(key, 'getBoundingClientRect').mockReturnValue({ bottom: 40, height: 20, top: 20 } as DOMRect);
+    vi.spyOn(key, 'getBoundingClientRect').mockReturnValue({ bottom: 40, height: 20, left: 10, right: 250, top: 20, width: 240 } as DOMRect);
+    vi.spyOn(value, 'getBoundingClientRect').mockReturnValue({ bottom: 40, height: 20, left: 250, right: 900, top: 20, width: 650 } as DOMRect);
 
-    expect(resolveDomBreadcrumbPropertyAtPointer(value, 30, 'field')).toBe(property);
-    expect(resolveDomBreadcrumbPropertyAtPointer(key, 30, 'key')).toBe(property);
-    expect(resolveDomBreadcrumbPropertyAtPointer(value, 30, 'key')).toBeNull();
-    expect(resolveDomBreadcrumbPropertyAtPointer(icon, 30, 'toggle')).toBe(property);
-    expect(resolveDomBreadcrumbPropertyAtPointer(collapse, 30, 'toggle')).toBe(property);
-    expect(resolveDomBreadcrumbPropertyAtPointer(key, 30, 'toggle')).toBeNull();
-    expect(resolveDomPropertyAtPointer(value, 30)).toBe(property);
+    expect(resolveDomBreadcrumbPropertyAtPointer(value, 800, 30, 'field')).toBe(property);
+    expect(resolveDomBreadcrumbPropertyAtPointer(value, 200, 30, 'key')).toBe(property);
+    expect(resolveDomBreadcrumbPropertyAtPointer(key, 300, 30, 'key')).toBeNull();
+    expect(resolveDomBreadcrumbPropertyAtPointer(icon, 20, 30, 'toggle')).toBe(property);
+    expect(resolveDomBreadcrumbPropertyAtPointer(collapse, 20, 30, 'toggle')).toBe(property);
+    expect(resolveDomBreadcrumbPropertyAtPointer(key, 20, 30, 'toggle')).toBeNull();
+    expect(resolveDomPropertyAtPointer(value, 800, 30)).toBe(property);
     container.remove();
   });
 
@@ -153,10 +157,10 @@ describe('property field visual render guards', () => {
     const line = sourceView.createDiv({ cls: 'cm-line', text: 'root: value' });
     vi.spyOn(line, 'getBoundingClientRect').mockReturnValue({ bottom: 40, height: 20, top: 20 } as DOMRect);
 
-    expect(resolveSourceLineElementAtPointer(line, 30)).toBe(line);
-    expect(resolveSourceLineElementAtPointer(sourceView, 30)).toBe(line);
-    expect(resolveSourceLineElementAtPointer(sourceView, 50)).toBeNull();
-    expect(resolveSourceLineElementAtPointer(document.body, 30)).toBeNull();
+    expect(resolveSourceLineElementAtPointer(line, 40, 30)).toBe(line);
+    expect(resolveSourceLineElementAtPointer(sourceView, 500, 30)).toBe(line);
+    expect(resolveSourceLineElementAtPointer(sourceView, 500, 50)).toBeNull();
+    expect(resolveSourceLineElementAtPointer(document.body, 500, 30)).toBeNull();
     sourceView.remove();
   });
 
@@ -176,7 +180,7 @@ describe('property field visual render guards', () => {
     const foldGutter = sourceView.createDiv({ cls: 'cm-foldGutter' });
     const foldToggle = foldGutter.createDiv({ cls: 'cm-gutterElement', text: '⌄' });
     const emptyGutter = foldGutter.createDiv({ cls: 'cm-gutterElement' });
-    vi.spyOn(line, 'getBoundingClientRect').mockReturnValue({ bottom: 40, height: 20, top: 20 } as DOMRect);
+    vi.spyOn(line, 'getBoundingClientRect').mockReturnValue({ bottom: 40, height: 20, left: 10, right: 800, top: 20, width: 790 } as DOMRect);
     const createRange = vi.spyOn(document, 'createRange').mockReturnValue(castTo<Range>({
       getBoundingClientRect: () => ({ left: 10, right: 70, width: 60 }),
       getClientRects: () => [],
@@ -192,6 +196,22 @@ describe('property field visual render guards', () => {
     expect(resolveSourceBreadcrumbLineAtPointer(line, 40, 30, 'toggle')).toBeNull();
     createRange.mockRestore();
     sourceView.remove();
+  });
+
+  it('should recognize only the Windows Ctrl+Y redo shortcut', () => {
+    expect(isRedoShortcut({ altKey: false, ctrlKey: true, key: 'y', metaKey: false, shiftKey: false })).toBe(true);
+    expect(isRedoShortcut({ altKey: false, ctrlKey: true, key: 'Y', metaKey: false, shiftKey: false })).toBe(true);
+    expect(isRedoShortcut({ altKey: false, ctrlKey: true, key: 'y', metaKey: false, shiftKey: true })).toBe(false);
+    expect(isRedoShortcut({ altKey: false, ctrlKey: false, key: 'y', metaKey: true, shiftKey: false })).toBe(false);
+  });
+
+  it('should invoke the redo fallback only when Obsidian did not already handle the shortcut', () => {
+    const redo = vi.fn();
+    expect(applyRedoFallback({ getValue: () => 'unchanged', redo }, 'unchanged')).toBe(true);
+    expect(redo).toHaveBeenCalledTimes(1);
+
+    expect(applyRedoFallback({ getValue: () => 'native redo result', redo }, 'before redo')).toBe(false);
+    expect(redo).toHaveBeenCalledTimes(1);
   });
 
   it('should disambiguate duplicate Source-mode keys from surrounding visible YAML lines', () => {

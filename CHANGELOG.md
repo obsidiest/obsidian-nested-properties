@@ -2,6 +2,12 @@
 
 ## 2.0.0
 
+- breaking: rename the plugin, manifest ID, command namespace, release assets, and installation folder to Nested Properties Advanced (`nested-properties-advanced`)
+- fix: preserve Live Preview property edits in Obsidian's undo history so Ctrl+Y can redo a change after Ctrl+Z
+- fix: use geometric property-row hit testing so threading and hover-breadcrumb scopes cover their configured full widths
+- fix: map Source-mode hover targets through editor coordinates so root, flattened, repeated, and nested fields resolve reliably
+- fix: suppress the native ancestor-tree focus background while Highlight Active Property Field Tree is disabled
+- feat: add separate themed Style Settings controls for active-tree background and outline colors, with neutral gray and black defaults
 - fix: make nested object keys editable in Live Preview while keeping structural array indices read-only
 - fix: activate property threading across the full property key/value row, including Source-mode root and flattened fields
 - feat: add selectable full-field, full-key, and icon/expansion-toggle hover-breadcrumb activation scopes

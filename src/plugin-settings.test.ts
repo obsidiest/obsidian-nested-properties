@@ -35,7 +35,7 @@ describe('PluginSettings', () => {
       isPropertyFieldHoverBreadcrumbInSourceModeEnabled: true,
       isPropertyFieldHoverBreadcrumbStaticTreeIndentationGuidesEnabled: true,
       isPropertyFieldThreadingEnabled: false,
-      isPropertyFieldThreadingInHoverBreadcrumbEnabled: true,
+      isPropertyFieldThreadingInHoverBreadcrumbEnabled: false,
       isPropertyFieldThreadingInMainUiEnabled: true,
       isRememberAllNestedPropertiesExpansionToggleStateEnabled: true,
       isRememberFullKeyNamesExpansionToggleStateEnabled: true,

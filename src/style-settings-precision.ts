@@ -1,7 +1,7 @@
 /* v8 ignore file -- Runs against the separately installed Style Settings plugin's live settings DOM. */
 /* eslint-disable @typescript-eslint/method-signature-style, @typescript-eslint/no-confusing-void-expression, @typescript-eslint/no-unnecessary-condition, func-style, no-magic-numbers, no-restricted-syntax, perfectionist/sort-classes, perfectionist/sort-maps, perfectionist/sort-modules, prefer-named-capture-group, unicorn/consistent-boolean-name, unicorn/dom-node-dataset, unicorn/no-incorrect-query-selector, unicorn/prefer-modern-dom-apis, unicorn/prefer-spread -- Style Settings supplies an external, mutation-driven DOM whose controls must be enhanced in place while preserving its native events. */
-const MARKER_SELECTOR = '[data-id^="np-"], [data-id^="nested-properties@@np-"], [data-id*="@@np-"]';
-const SECTION_SELECTOR = '.style-settings-heading[data-id="nested-properties"], .style-settings-heading[data-id$="@@nested-properties"]';
+const MARKER_SELECTOR = '[data-id^="np-"], [data-id^="nested-properties-advanced@@np-"], [data-id*="@@np-"]';
+const SECTION_SELECTOR = '.style-settings-heading[data-id="nested-properties-advanced"], .style-settings-heading[data-id$="@@nested-properties-advanced"]';
 const NUMBER_INPUT_CLASS = 'np-style-settings-number-input';
 const COLOR_INPUT_CLASS = 'np-style-settings-color-input';
 const COLOR_DEFAULTS = new Map<string, string>([
@@ -68,7 +68,7 @@ function getOpenStyleSettingsHeadings(ownerDocument: Document): Element[] {
   // eslint-disable-next-line unicorn/prefer-query-selector -- This startup/hot-path guard intentionally uses the browser's class-name index instead of running the selector engine across the Obsidian workspace.
   return Array.from(ownerDocument.getElementsByClassName('style-settings-heading')).filter((heading) => {
     const id = heading.getAttribute('data-id') ?? '';
-    return id === 'nested-properties' || id.endsWith('@@nested-properties');
+    return id === 'nested-properties-advanced' || id.endsWith('@@nested-properties-advanced');
   });
 }
 

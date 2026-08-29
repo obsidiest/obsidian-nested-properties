@@ -2,13 +2,14 @@ import type { App } from 'obsidian';
 
 import { Notice } from 'obsidian';
 
-const FULL_KEY_DISPLAY_COMMAND_ID = 'nested-properties:toggle-full-key-display';
+const PLUGIN_COMMAND_PREFIX = 'nested-properties-advanced';
+const FULL_KEY_DISPLAY_COMMAND_ID = `${PLUGIN_COMMAND_PREFIX}:toggle-full-key-display`;
 const VAULT_WIDE_DEMO_FOLDER = 'Vault-wide demo';
 const SEARCH_DEMO_FOLDER = 'Search demo';
 
-// Nested Properties has a single live setting - full key display - toggled by a command that flips a
-// body class across all windows with no reload. So the demo just runs that command (the same thing the
-// command palette and the Properties-header button do); there is no data.json patch + reload to perform.
+// Nested Properties Advanced exposes full key display as a live command that flips a body class across
+// all windows with no reload. The demo runs that command, matching both the command palette and the
+// Properties-header button; there is no data.json patch + reload to perform.
 export function toggleFullKeyDisplay(app: App): void {
   app.commands.executeCommandById(FULL_KEY_DISPLAY_COMMAND_ID);
   new Notice('Toggled full key display.');
@@ -64,7 +65,7 @@ export async function removeDemoFolders(app: App): Promise<void> {
 // Runs one of the plugin's vault-wide commands. Both open a picker, so the choosing stays yours - this
 // only saves hunting through the command palette while reading about them.
 export function runCommand(app: App, commandId: string): void {
-  app.commands.executeCommandById(`nested-properties:${commandId}`);
+  app.commands.executeCommandById(`${PLUGIN_COMMAND_PREFIX}:${commandId}`);
 }
 
 // `07 Changing property types` is the one cumulative walkthrough here: each conversion rewrites this

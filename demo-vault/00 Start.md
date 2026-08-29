@@ -1,6 +1,6 @@
 # Start here
 
-Welcome to the [Nested Properties](https://github.com/mnaoumov/obsidian-nested-properties/) demo vault. Each note below has **frontmatter** that shows off one feature - open the note and look at the **Properties** panel at the top to see nested objects and arrays rendered as a collapsible, editable tree.
+Welcome to the [Nested Properties Advanced](https://github.com/obsidiest/obsidian-nested-properties-advanced/) demo vault. Each note below has **frontmatter** that shows off one feature - open the note and look at the **Properties** panel at the top to see nested objects and arrays rendered as a collapsible, editable tree.
 
 **How to view a feature:** open a note, then make sure the **Properties** are visible at the top of the editor (they are shown by default here). Expand and collapse the nested properties, right-click a nested key for its context menu, or drag deeply nested rows sideways.
 

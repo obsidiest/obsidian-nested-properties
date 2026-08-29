@@ -28,6 +28,20 @@ function readRepoFile(path: string): string {
 }
 
 describe('property field feature release quality', () => {
+  it('should consistently identify the advanced fork and its neutral active-tree palette', () => {
+    const manifest = JSON.parse(readRepoFile('manifest.json')) as Record<string, unknown>;
+    const packageJson = JSON.parse(readRepoFile('package.json')) as Record<string, unknown>;
+    const styleSource = readRepoFile('src/styles/main.scss');
+
+    expect(manifest).toEqual(expect.objectContaining({ id: 'nested-properties-advanced', name: 'Nested Properties Advanced', version: '2.0.0' }));
+    expect(packageJson).toEqual(expect.objectContaining({ name: 'nested-properties-advanced', version: '2.0.0' }));
+    expect(packageJson['repository']).toBe('git+https://github.com/obsidiest/obsidian-nested-properties-advanced.git');
+    expect(styleSource).toContain('id: nested-properties-advanced');
+    expect(styleSource).toContain('id: np-active-tree-background-color');
+    expect(styleSource).toContain('id: np-active-tree-outline-color');
+    expect(styleSource).not.toContain('--np-active-tree-color: #7aa2f7');
+  });
+
   it('should expose every persisted setting through the searchable settings tab', () => {
     const settingsSource = readRepoFile('src/plugin-settings.ts');
     const settingTabSource = readRepoFile('src/plugin-setting-tab.ts');
@@ -64,7 +78,7 @@ describe('property field feature release quality', () => {
   });
 
   it('should mirror fresh production assets to the repository root for local deployment', async () => {
-    const rootFolder = await mkdtemp(join(tmpdir(), 'nested-properties-build-'));
+    const rootFolder = await mkdtemp(join(tmpdir(), 'nested-properties-advanced-build-'));
     const buildFolder = join(rootFolder, 'dist', 'build');
 
     try {

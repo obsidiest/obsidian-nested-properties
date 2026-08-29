@@ -1,7 +1,7 @@
 ---
 project:
   identity:
-    name: Nested Properties
+    name: Nested Properties Advanced
     version: 2.0.0
   release:
     channel: beta
@@ -20,12 +20,12 @@ contributors:
 
 This note's own properties form several nested branches. Use them to try the visual hierarchy features without changing another note.
 
-1. Open **Settings → Nested Properties**. **Property Field Hover Breadcrumb** is enabled by default and can be switched off globally or by view mode.
+1. Open **Settings → Nested Properties Advanced**. **Property Field Hover Breadcrumb** is enabled by default and can be switched off globally or by view mode.
 2. By default, hover anywhere across a property key. Enable **Full-Width Property Field Hover Activation** to include the value and the rest of the row, or disable both activation-scope switches to require the property icon in Live Preview/Reading mode or the left-side expansion toggle in Source mode.
 3. Try the selected activation scope above this note in Live Preview, then switch to Source and Reading modes.
 4. Move through the breadcrumb with the arrow, Home, and End keys. Click a row to focus that field.
 5. Enable **Property Field Threading**. Compare active-field, all-branches, root-level, and cursor activation while moving between `project`, `contributors`, and their descendants.
-6. Install and enable **Style Settings**, then open **Nested Properties** there to adjust guide lines, depth colors, breadcrumb sizing, typography, and spacing. Every numerical slider has a synchronized precise text box.
+6. Install and enable **Style Settings**, then open **Nested Properties Advanced** there to adjust guide lines, depth colors, breadcrumb sizing, typography, and spacing. Every numerical slider has a synchronized precise text box.
 
 Static main-UI and breadcrumb guides and the hover breadcrumb are enabled by default. The threading master switch remains disabled by default, so threading is opt-in. **Highlight Active Property Field Tree** is also opt-in and has its own Style Settings controls.
 

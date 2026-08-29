@@ -59,7 +59,7 @@ interface InlineTitleApp {
   updateInlineTitleDisplay(this: void): void;
 }
 
-const PLUGIN_ID = 'nested-properties';
+const PLUGIN_ID = 'nested-properties-advanced';
 const WIDTH_IN_PIXELS = 900;
 const HEIGHT_IN_PIXELS = 1600;
 

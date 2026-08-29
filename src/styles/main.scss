@@ -228,7 +228,8 @@ body {
   --np-active-field-outline-thickness: 1px;
   --np-active-field-outline-opacity: 0.55;
   --np-active-field-outline-offset: 1px;
-  --np-active-tree-color: #7aa2f7;
+  --np-active-tree-background-color: #000000;
+  --np-active-tree-outline-color: #8a8a8a;
   --np-active-tree-background-opacity: 0.08;
   --np-active-tree-outline-thickness: 1px;
   --np-active-tree-outline-opacity: 0.45;
@@ -291,7 +292,8 @@ body {
 body.theme-light {
   --np-guide-color: #777777;
   --np-active-field-color: #4c78cc;
-  --np-active-tree-color: #4c78cc;
+  --np-active-tree-background-color: #6b6b6b;
+  --np-active-tree-outline-color: #333333;
   --np-thread-fallback-color: var(--np-thread-fallback-color-light);
   --np-thread-override-color: var(--np-thread-override-color-light);
   --np-breadcrumb-background: #ffffff;
@@ -489,19 +491,16 @@ body.np-thread-override-colors-enabled {
   }
 }
 
-body:not(.np-highlight-active-property-field-tree-enabled) .nested-properties-collapsible:has(> .metadata-property-value > .nested-properties-container .metadata-property:focus-within) {
-  background: transparent;
-  outline: none;
-  box-shadow: none;
+body:not(.np-highlight-active-property-field-tree-enabled) .metadata-container .nested-properties-collapsible:focus-within {
+  background: transparent !important;
+  outline: none !important;
+  box-shadow: none !important;
 }
 
-body.np-highlight-active-property-field-tree-enabled :is(
-  .metadata-property:focus-within,
-  .nested-properties-collapsible:has(> .metadata-property-value > .nested-properties-container .metadata-property:focus-within)
-) {
+body.np-highlight-active-property-field-tree-enabled .metadata-container .metadata-property:focus-within {
   border-radius: var(--np-active-tree-radius);
-  background: color-mix(in srgb, var(--np-active-tree-color) calc(var(--np-active-tree-background-opacity) * 100%), transparent);
-  outline: var(--np-active-tree-outline-thickness) solid color-mix(in srgb, var(--np-active-tree-color) calc(var(--np-active-tree-outline-opacity) * 100%), transparent);
+  background: color-mix(in srgb, var(--np-active-tree-background-color) calc(var(--np-active-tree-background-opacity) * 100%), transparent);
+  outline: var(--np-active-tree-outline-thickness) solid color-mix(in srgb, var(--np-active-tree-outline-color) calc(var(--np-active-tree-outline-opacity) * 100%), transparent);
   outline-offset: var(--np-active-tree-outline-offset);
 }
 
@@ -553,8 +552,8 @@ body.np-highlight-active-property-field-tree-enabled :is(
 /* @settings
 # @preserve
 
-name: Nested Properties
-id: nested-properties
+name: Nested Properties Advanced
+id: nested-properties-advanced
 settings:
   -
     id: np-guide-appearance
@@ -829,13 +828,21 @@ settings:
     level: 3
     collapsed: true
   -
-    id: np-active-tree-color
-    title: Active property field tree color
+    id: np-active-tree-background-color
+    title: Active property field tree background color
     type: variable-themed-color
     format: hex
     opacity: false
-    default-light: '#4c78cc'
-    default-dark: '#7aa2f7'
+    default-light: '#6b6b6b'
+    default-dark: '#000000'
+  -
+    id: np-active-tree-outline-color
+    title: Active property field tree outline color
+    type: variable-themed-color
+    format: hex
+    opacity: false
+    default-light: '#333333'
+    default-dark: '#8a8a8a'
   -
     id: np-active-tree-background-opacity
     title: Active property field tree background opacity

@@ -25,6 +25,7 @@ const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
 const POPOVER_HIDE_DELAY_IN_MILLISECONDS = 120;
 const OWNED_VISUAL_SELECTOR = '.np-property-tree-overlay, .np-property-breadcrumb-popover';
 const METADATA_CONTAINER_SELECTOR = '.metadata-container';
+const propertyFieldHitSnapshots = new WeakMap<HTMLElement, PropertyFieldHitSnapshot>();
 
 type ViewMode = 'live-preview' | 'reading' | 'source';
 
@@ -58,8 +59,10 @@ interface DocumentState {
   hideTimer: number | null;
   hoveredBreadcrumbField: HTMLElement | null;
   hoveredThreadingField: HTMLElement | null;
+  lastPropertyEditorView: MarkdownView | null;
   mutationObserver: MutationObserver | null;
   popover: HTMLElement | null;
+  redoFallbackTimer: number | null;
   renderFrame: number | null;
   renderGeneration: number;
   sourceHighlight: HTMLElement | null;
@@ -77,9 +80,28 @@ interface PropertyFieldVisualsComponentParams {
   pluginSettingsComponent: PluginSettingsComponent;
 }
 
+interface RedoCapableEditor {
+  getValue(): string;
+  redo(): void;
+}
+
 interface Point {
   x: number;
   y: number;
+}
+
+interface PropertyFieldHitEntry {
+  bottom: number;
+  element: HTMLElement;
+  keyLeft: number;
+  keyRight: number;
+  top: number;
+}
+
+interface PropertyFieldHitSnapshot {
+  entries: PropertyFieldHitEntry[];
+  height: number;
+  width: number;
 }
 
 export type CssNumberReader = (variable: string, fallback: number) => number;
@@ -148,6 +170,9 @@ export class PropertyFieldVisualsComponent extends Component {
       if (state.renderFrame !== null) {
         ownerDocument.defaultView?.cancelAnimationFrame(state.renderFrame);
       }
+      if (state.redoFallbackTimer !== null) {
+        ownerDocument.defaultView?.clearTimeout(state.redoFallbackTimer);
+      }
       state.popover?.remove();
       state.sourceHighlight?.classList.remove('np-property-field-source-highlight');
       removeVisualArtifacts(ownerDocument);
@@ -198,8 +223,10 @@ export class PropertyFieldVisualsComponent extends Component {
       hideTimer: null,
       hoveredBreadcrumbField: null,
       hoveredThreadingField: null,
+      lastPropertyEditorView: null,
       mutationObserver: null,
       popover: null,
+      redoFallbackTimer: null,
       renderFrame: null,
       renderGeneration: 0,
       sourceHighlight: null
@@ -213,8 +240,20 @@ export class PropertyFieldVisualsComponent extends Component {
     this.listen(ownerDocument, state, 'focusout', (event) => this.onFocusOut(ownerDocument, event));
     this.listen(ownerDocument, state, 'input', (event) => this.onPropertyEditorChanged(ownerDocument, event));
     this.listen(ownerDocument, state, 'change', (event) => this.onPropertyEditorChanged(ownerDocument, event));
+    const keyDownListener = (event: KeyboardEvent): void => this.onKeyDown(ownerDocument, event);
+    ownerDocument.addEventListener('keydown', keyDownListener, { capture: true });
+    state.cleanups.push(() => ownerDocument.removeEventListener('keydown', keyDownListener, { capture: true }));
     this.listen(ownerDocument, state, 'keyup', () => this.onEditorCursorChanged(ownerDocument));
     this.listen(ownerDocument, state, 'mouseup', () => this.onEditorCursorChanged(ownerDocument));
+    const scrollListener = (event: Event): void => {
+      const target = event.target;
+      const container = target instanceof ownerDocument.defaultView!.Node ? asElement(target)?.closest<HTMLElement>(METADATA_CONTAINER_SELECTOR) ?? null : null;
+      if (container !== null) {
+        this.invalidateContainer(container);
+      }
+    };
+    ownerDocument.addEventListener('scroll', scrollListener, { capture: true });
+    state.cleanups.push(() => ownerDocument.removeEventListener('scroll', scrollListener, { capture: true }));
     const layoutChangeListener = (event: Event): void => {
       const target = event.target;
       const container = target instanceof ownerDocument.defaultView!.Node ? asElement(target)?.closest<HTMLElement>(METADATA_CONTAINER_SELECTOR) ?? null : null;
@@ -248,6 +287,7 @@ export class PropertyFieldVisualsComponent extends Component {
           shouldRender = true;
           for (const container of getPropertyFieldMutationContainers(mutation)) {
             this.containerRenderSnapshots.delete(container);
+            propertyFieldHitSnapshots.delete(container);
           }
         }
         if (shouldRender) {
@@ -269,12 +309,16 @@ export class PropertyFieldVisualsComponent extends Component {
     if (state === undefined) {
       return;
     }
+    for (const container of getShownMetadataContainers(ownerDocument)) {
+      propertyFieldHitSnapshots.delete(container);
+    }
     state.renderGeneration += 1;
     this.scheduleRender(ownerDocument);
   }
 
   private invalidateContainer(container: HTMLElement): void {
     this.containerRenderSnapshots.delete(container);
+    propertyFieldHitSnapshots.delete(container);
     this.scheduleRender(container.ownerDocument);
   }
 
@@ -298,16 +342,16 @@ export class PropertyFieldVisualsComponent extends Component {
     }
 
     const isHoverThreadingEnabled = this.isMainThreadingEnabled() && !this.pluginSettingsComponent.settings.isActiveCursorPropertyFieldThreadingEnabled;
-    const propertyElement = resolveDomPropertyAtPointer(target, event.clientY);
+    const propertyElement = resolveDomPropertyAtPointer(target, event.clientX, event.clientY);
     const metadataContainer = propertyElement?.closest<HTMLElement>(METADATA_CONTAINER_SELECTOR) ?? null;
     if (propertyElement !== null && metadataContainer !== null) {
       const isBreadcrumbEnabled = this.isBreadcrumbEnabled(detectViewMode(propertyElement));
-      const breadcrumbElement = isBreadcrumbEnabled ? resolveDomBreadcrumbPropertyAtPointer(target, event.clientY, this.getBreadcrumbActivationScope()) : null;
+      const breadcrumbElement = isBreadcrumbEnabled ? resolveDomBreadcrumbPropertyAtPointer(target, event.clientX, event.clientY, this.getBreadcrumbActivationScope()) : null;
       this.updateDomPointerActivation(ownerDocument, state, metadataContainer, breadcrumbElement, isHoverThreadingEnabled ? propertyElement : null);
       return;
     }
 
-    const sourceLine = resolveSourceLineElementAtPointer(target, event.clientY);
+    const sourceLine = resolveSourceLineElementAtPointer(target, event.clientX, event.clientY);
     if (sourceLine === null || detectViewMode(sourceLine) !== 'source') {
       this.clearPointerActivation(ownerDocument);
       return;
@@ -331,7 +375,7 @@ export class PropertyFieldVisualsComponent extends Component {
       }
       return;
     }
-    const sourceTarget = this.resolveSourceTarget(sourceLine);
+    const sourceTarget = this.resolveSourceTarget(sourceLine, event.clientX, event.clientY);
     if (sourceTarget === null) {
       this.clearPointerActivation(ownerDocument);
       return;
@@ -467,15 +511,16 @@ export class PropertyFieldVisualsComponent extends Component {
     if (target instanceof ownerDocument.defaultView!.Element) {
       const container = target.closest<HTMLElement>(METADATA_CONTAINER_SELECTOR);
       if (container !== null) {
+        const state = this.documentStates.get(ownerDocument);
+        if (state !== undefined) {
+          state.lastPropertyEditorView = this.findMarkdownView(ownerDocument, container);
+        }
         this.invalidateContainer(container);
       }
     }
   }
 
   private onFocusIn(ownerDocument: Document, event: FocusEvent): void {
-    if (!this.pluginSettingsComponent.settings.isActiveCursorPropertyFieldThreadingEnabled || !this.isMainThreadingEnabled()) {
-      return;
-    }
     const target = event.target;
     if (!(target instanceof ownerDocument.defaultView!.Element)) {
       return;
@@ -483,10 +528,42 @@ export class PropertyFieldVisualsComponent extends Component {
     const propertyElement = target.closest<HTMLElement>('.metadata-property');
     const metadataContainer = propertyElement?.closest<HTMLElement>('.metadata-container') ?? null;
     const state = this.documentStates.get(ownerDocument);
+    if (metadataContainer !== null && state !== undefined) {
+      state.lastPropertyEditorView = this.findMarkdownView(ownerDocument, metadataContainer);
+    }
+    if (!this.pluginSettingsComponent.settings.isActiveCursorPropertyFieldThreadingEnabled || !this.isMainThreadingEnabled()) {
+      return;
+    }
     if (propertyElement !== null && metadataContainer !== null && state !== undefined) {
       state.active = { container: metadataContainer, element: propertyElement, kind: 'dom' };
       this.scheduleRender(ownerDocument);
     }
+  }
+
+  private onKeyDown(ownerDocument: Document, event: KeyboardEvent): void {
+    if (!isRedoShortcut(event) || event.repeat) {
+      return;
+    }
+    const activeElement = ownerDocument.activeElement;
+    if (activeElement instanceof ownerDocument.defaultView!.HTMLElement && activeElement.matches('input, textarea, [contenteditable="true"]')) {
+      return;
+    }
+    const state = this.documentStates.get(ownerDocument);
+    const view = state?.lastPropertyEditorView;
+    const win = ownerDocument.defaultView;
+    if (state === undefined || view === null || view === undefined || win === null || !view.containerEl.isConnected) {
+      return;
+    }
+    const beforeRedo = view.editor.getValue();
+    if (state.redoFallbackTimer !== null) {
+      win.clearTimeout(state.redoFallbackTimer);
+    }
+    // Let Obsidian's own Ctrl+Y command run first. If it did not mutate the document after a
+    // Properties-field blur/Escape, invoke the active Markdown editor's native redo operation.
+    state.redoFallbackTimer = win.setTimeout(() => {
+      state.redoFallbackTimer = null;
+      applyRedoFallback(view.editor, beforeRedo);
+    }, 0);
   }
 
   private onFocusOut(ownerDocument: Document, event: FocusEvent): void {
@@ -969,14 +1046,14 @@ export class PropertyFieldVisualsComponent extends Component {
     return settings.isPropertyFieldThreadingEnabled && settings.isPropertyFieldThreadingInMainUiEnabled;
   }
 
-  private resolveSourceTarget(lineElement: HTMLElement): null | { node: SourcePropertyFieldNode; roots: SourcePropertyFieldNode[]; view: MarkdownView } {
+  private resolveSourceTarget(lineElement: HTMLElement, clientX: number, clientY: number): null | { node: SourcePropertyFieldNode; roots: SourcePropertyFieldNode[]; view: MarkdownView } {
     const view = this.findMarkdownView(lineElement.ownerDocument, lineElement);
     if (view === null) {
       return null;
     }
     const source = view.editor.getValue();
     const roots = parseSourcePropertyFields(source);
-    const line = resolveSourceLine(lineElement, source, view.editor.getCursor().line);
+    const line = resolveSourceDocumentLineAtPointer(view, lineElement, clientX, clientY, source);
     const node = findSourcePropertyNodeAtLine(roots, line);
     return node === null ? null : { node, roots, view };
   }
@@ -1040,6 +1117,18 @@ export function getBreadcrumbKeyboardTarget(key: string, activeIndex: number, le
     return length - 1;
   }
   return null;
+}
+
+export function isRedoShortcut(event: Pick<KeyboardEvent, 'altKey' | 'ctrlKey' | 'key' | 'metaKey' | 'shiftKey'>): boolean {
+  return event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey && event.key.toLowerCase() === 'y';
+}
+
+export function applyRedoFallback(editor: RedoCapableEditor, beforeRedo: string): boolean {
+  if (editor.getValue() !== beforeRedo) {
+    return false;
+  }
+  editor.redo();
+  return true;
 }
 
 function appendPath(svg: SVGSVGElement, data: string, className: string, depth: number): void {
@@ -1194,20 +1283,12 @@ function removeVisualArtifacts(ownerDocument: Document): void {
   }
 }
 
-export function resolveDomPropertyAtPointer(target: Element, clientY: number): HTMLElement | null {
-  const directProperty = target.closest<HTMLElement>('.metadata-property');
-  if (directProperty !== null) {
-    return directProperty;
-  }
-  const container = target.closest<HTMLElement>(METADATA_CONTAINER_SELECTOR);
+export function resolveDomPropertyAtPointer(target: Element, clientX: number, clientY: number): HTMLElement | null {
+  const container = resolveMetadataContainerAtPointer(target, clientX, clientY);
   if (container === null) {
     return null;
   }
-  const nodes = flattenVisiblePropertyFieldForest(buildPropertyFieldForest(container));
-  const keyElements = nodes.map((node) => node.keyElement);
-  const keyElement = findElementAtClientY(keyElements, clientY);
-  const index = keyElement === null ? -1 : keyElements.indexOf(keyElement);
-  return index < 0 ? null : nodes[index]?.element ?? null;
+  return findPropertyFieldHitEntryAtPointer(container, clientY)?.element ?? null;
 }
 
 export function resolveBreadcrumbActivationScope(isFullFieldEnabled: boolean, isFullKeyEnabled: boolean): BreadcrumbActivationScope {
@@ -1217,34 +1298,48 @@ export function resolveBreadcrumbActivationScope(isFullFieldEnabled: boolean, is
   return isFullKeyEnabled ? 'key' : 'toggle';
 }
 
-export function resolveDomBreadcrumbPropertyAtPointer(target: Element, clientY: number, scope: BreadcrumbActivationScope): HTMLElement | null {
+export function resolveDomBreadcrumbPropertyAtPointer(target: Element, clientX: number, clientY: number, scope: BreadcrumbActivationScope): HTMLElement | null {
   if (scope === 'field') {
-    return resolveDomPropertyAtPointer(target, clientY);
+    return resolveDomPropertyAtPointer(target, clientX, clientY);
   }
-  const activationElement = scope === 'key'
-    ? target.closest<HTMLElement>('.metadata-property-key')
-    : target.closest<HTMLElement>('.metadata-property-icon, .nested-properties-collapse-btn');
-  return activationElement?.closest<HTMLElement>('.metadata-property') ?? null;
+  if (scope === 'toggle') {
+    return target.closest<HTMLElement>('.metadata-property-icon, .nested-properties-collapse-btn')?.closest<HTMLElement>('.metadata-property') ?? null;
+  }
+  const container = resolveMetadataContainerAtPointer(target, clientX, clientY);
+  if (container === null) {
+    return null;
+  }
+  const entry = findPropertyFieldHitEntryAtPointer(container, clientY);
+  if (entry === null) {
+    return null;
+  }
+  const containerRect = container.getBoundingClientRect();
+  const relativeClientX = clientX - containerRect.left;
+  return relativeClientX >= entry.keyLeft && relativeClientX <= entry.keyRight ? entry.element : null;
 }
 
-export function resolveSourceLineElementAtPointer(target: Element, clientY: number): HTMLElement | null {
+export function resolveSourceLineElementAtPointer(target: Element, clientX: number, clientY: number): HTMLElement | null {
   const directLine = target.closest<HTMLElement>('.cm-line');
   if (directLine !== null) {
     return directLine;
   }
-  const sourceView = target.closest<HTMLElement>('.markdown-source-view.mod-cm6');
+  const sourceView = resolveSourceViewAtPointer(target, clientX, clientY);
   return sourceView === null ? null : findElementAtClientY(Array.from(sourceView.querySelectorAll<HTMLElement>('.cm-line')), clientY);
 }
 
 export function resolveSourceBreadcrumbLineAtPointer(target: Element, clientX: number, clientY: number, scope: BreadcrumbActivationScope): HTMLElement | null {
   if (scope === 'field') {
-    return resolveSourceLineElementAtPointer(target, clientY);
+    return resolveSourceLineElementAtPointer(target, clientX, clientY);
   }
   if (scope === 'toggle') {
-    return resolveSourceFoldToggleLineAtPointer(target, clientY);
+    return resolveSourceFoldToggleLineAtPointer(target, clientX, clientY);
   }
-  const line = resolveSourceLineElementAtPointer(target, clientY);
-  return line !== null && isClientXWithinSourceKey(line, clientX) ? line : null;
+  const toggleLine = resolveSourceFoldToggleLineAtPointer(target, clientX, clientY);
+  if (toggleLine !== null) {
+    return toggleLine;
+  }
+  const line = resolveSourceLineElementAtPointer(target, clientX, clientY);
+  return line !== null && isClientXWithinSourceKeyColumn(line, clientX) ? line : null;
 }
 
 export function getSourceKeyCharacterRange(text: string): null | { end: number; start: number } {
@@ -1309,7 +1404,7 @@ function findYamlMappingColon(text: string, start: number): number {
   return -1;
 }
 
-function isClientXWithinSourceKey(line: HTMLElement, clientX: number): boolean {
+function isClientXWithinSourceKeyColumn(line: HTMLElement, clientX: number): boolean {
   const characterRange = getSourceKeyCharacterRange(line.textContent ?? '');
   if (characterRange === null) {
     return false;
@@ -1320,10 +1415,11 @@ function isClientXWithinSourceKey(line: HTMLElement, clientX: number): boolean {
   }
   const rects = typeof range.getClientRects === 'function' ? Array.from(range.getClientRects()) : [];
   if (rects.length > 0) {
-    return rects.some((rect) => rect.width > 0 && clientX >= rect.left && clientX <= rect.right);
+    const keyRight = Math.max(...rects.filter((rect) => rect.width > 0).map((rect) => rect.right));
+    return Number.isFinite(keyRight) && clientX >= line.getBoundingClientRect().left && clientX <= keyRight;
   }
   const rect = range.getBoundingClientRect();
-  return rect.width > 0 && clientX >= rect.left && clientX <= rect.right;
+  return rect.width > 0 && clientX >= line.getBoundingClientRect().left && clientX <= rect.right;
 }
 
 function createTextRange(element: HTMLElement, start: number, end: number): Range | null {
@@ -1359,16 +1455,85 @@ function createTextRange(element: HTMLElement, start: number, end: number): Rang
   return range;
 }
 
-function resolveSourceFoldToggleLineAtPointer(target: Element, clientY: number): HTMLElement | null {
+function resolveSourceFoldToggleLineAtPointer(target: Element, clientX: number, clientY: number): HTMLElement | null {
   const directToggle = target.closest<HTMLElement>('.collapse-indicator, .cm-foldMarker, .cm-fold-indicator, [aria-label*="fold" i]');
   if (directToggle !== null) {
-    return resolveSourceLineElementAtPointer(directToggle, clientY);
+    return resolveSourceLineElementAtPointer(directToggle, clientX, clientY);
   }
   const gutterElement = target.closest<HTMLElement>('.cm-foldGutter .cm-gutterElement');
   if (gutterElement === null || (gutterElement.childNodes.length === 0 && gutterElement.textContent?.trim() === '')) {
     return null;
   }
-  return resolveSourceLineElementAtPointer(gutterElement, clientY);
+  return resolveSourceLineElementAtPointer(gutterElement, clientX, clientY);
+}
+
+function resolveMetadataContainerAtPointer(target: Element, clientX: number, clientY: number): HTMLElement | null {
+  const directContainer = target.closest<HTMLElement>(METADATA_CONTAINER_SELECTOR);
+  if (directContainer !== null) {
+    return directContainer;
+  }
+  return getShownMetadataContainers(target.ownerDocument)
+    .filter((container) => isClientPointWithinRect(container.getBoundingClientRect(), clientX, clientY))
+    .sort((left, right) => left.getBoundingClientRect().height - right.getBoundingClientRect().height)[0] ?? null;
+}
+
+function resolveSourceViewAtPointer(target: Element, clientX: number, clientY: number): HTMLElement | null {
+  const directView = target.closest<HTMLElement>('.markdown-source-view');
+  if (directView !== null) {
+    return directView;
+  }
+  return Array.from(target.ownerDocument.querySelectorAll<HTMLElement>('.markdown-source-view'))
+    .filter((view) => view.isShown() && isClientPointWithinRect(view.getBoundingClientRect(), clientX, clientY))
+    .sort((left, right) => left.getBoundingClientRect().height - right.getBoundingClientRect().height)[0] ?? null;
+}
+
+function findPropertyFieldHitEntryAtPointer(container: HTMLElement, clientY: number): PropertyFieldHitEntry | null {
+  const containerRect = container.getBoundingClientRect();
+  const snapshot = getPropertyFieldHitSnapshot(container, containerRect);
+  const relativeClientY = clientY - containerRect.top;
+  return snapshot.entries.find((entry) => relativeClientY >= entry.top && relativeClientY <= entry.bottom) ?? null;
+}
+
+function getPropertyFieldHitSnapshot(container: HTMLElement, containerRect: Pick<DOMRect, 'height' | 'left' | 'top' | 'width'>): PropertyFieldHitSnapshot {
+  const cached = propertyFieldHitSnapshots.get(container);
+  if (cached?.width === containerRect.width && cached.height === containerRect.height) {
+    return cached;
+  }
+  const entries = flattenVisiblePropertyFieldForest(buildPropertyFieldForest(container))
+    .map((node) => {
+      const rect = getPropertyFieldHitRect(node);
+      const keyRect = node.keyElement.getBoundingClientRect();
+      return {
+        bottom: rect.bottom - containerRect.top,
+        depth: node.depth,
+        element: node.element,
+        height: rect.height,
+        keyLeft: keyRect.left - containerRect.left,
+        keyRight: keyRect.right - containerRect.left,
+        top: rect.top - containerRect.top
+      };
+    })
+    .filter((entry) => entry.height > 0)
+    .sort((left, right) => left.height - right.height || right.depth - left.depth)
+    .map(({ depth: _depth, height: _height, ...entry }) => entry);
+  const snapshot = { entries, height: containerRect.height, width: containerRect.width };
+  propertyFieldHitSnapshots.set(container, snapshot);
+  return snapshot;
+}
+
+function getPropertyFieldHitRect(node: PropertyFieldNode): Pick<DOMRect, 'bottom' | 'height' | 'top'> {
+  const keyRect = node.keyElement.getBoundingClientRect();
+  if (node.children.length > 0 || node.valueElement === null) {
+    return keyRect;
+  }
+  const valueRect = node.valueElement.getBoundingClientRect();
+  const top = Math.min(keyRect.top, valueRect.top);
+  const bottom = Math.max(keyRect.bottom, valueRect.bottom);
+  return { bottom, height: bottom - top, top };
+}
+
+function isClientPointWithinRect(rect: Pick<DOMRect, 'bottom' | 'left' | 'right' | 'top'>, clientX: number, clientY: number): boolean {
+  return Number.isFinite(clientX) && Number.isFinite(clientY) && clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom;
 }
 
 export function findElementAtClientY(elements: readonly HTMLElement[], clientY: number): HTMLElement | null {
@@ -1413,6 +1578,26 @@ export function resolveSourceLine(lineElement: HTMLElement, source: string, pref
   });
   scoredCandidates.sort((left, right) => right.score - left.score || Math.abs(left.candidate - preferredLine) - Math.abs(right.candidate - preferredLine));
   return scoredCandidates[0]?.candidate ?? preferredLine;
+}
+
+function resolveSourceDocumentLineAtPointer(view: MarkdownView, lineElement: HTMLElement, clientX: number, clientY: number, source: string): number {
+  const codeMirror = (view.editor as typeof view.editor & {
+    cm?: {
+      posAtCoords(point: Point, precise?: boolean): number | null;
+    };
+  }).cm;
+  if (codeMirror !== undefined) {
+    const rect = lineElement.getBoundingClientRect();
+    const horizontalInset = Math.min(1, Math.max(0, rect.width / 2));
+    const verticalInset = Math.min(1, Math.max(0, rect.height / 2));
+    const x = Math.min(Math.max(clientX, rect.left + horizontalInset), rect.right - horizontalInset);
+    const y = Math.min(Math.max(clientY, rect.top + verticalInset), rect.bottom - verticalInset);
+    const offset = codeMirror.posAtCoords({ x, y }, false);
+    if (offset !== null && Number.isSafeInteger(offset) && offset >= 0) {
+      return view.editor.offsetToPos(offset).line;
+    }
+  }
+  return resolveSourceLine(lineElement, source, view.editor.getCursor().line);
 }
 
 function getSourceLineMatchScore(sourceLine: string, visibleLine: string): number {

@@ -127,7 +127,7 @@ describe('Style Settings precision controls', () => {
     const row = createStyleSettingRow('np-guide-thickness', slider);
     const heading = createDiv();
     heading.className = 'style-settings-heading';
-    heading.dataset['id'] = 'nested-properties';
+    heading.dataset['id'] = 'nested-properties-advanced';
     const container = createDiv();
     container.className = 'style-settings-container';
     container.append(row);
@@ -146,10 +146,10 @@ describe('Style Settings precision controls', () => {
   it('should enhance an already open namespaced plugin section without scanning the document', () => {
     const slider = createEl('input');
     slider.type = 'range';
-    const row = createStyleSettingRow('nested-properties@@np-guide-thickness', slider);
+    const row = createStyleSettingRow('nested-properties-advanced@@np-guide-thickness', slider);
     const heading = createDiv();
     heading.className = 'style-settings-heading';
-    heading.dataset['id'] = 'community@@nested-properties';
+    heading.dataset['id'] = 'community@@nested-properties-advanced';
     const container = createDiv();
     container.className = 'style-settings-container';
     container.append(row);

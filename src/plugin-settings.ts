@@ -33,7 +33,7 @@ export class PluginSettings {
   public isPropertyFieldHoverBreadcrumbInSourceModeEnabled = true;
   public isPropertyFieldHoverBreadcrumbStaticTreeIndentationGuidesEnabled = true;
   public isPropertyFieldThreadingEnabled = false;
-  public isPropertyFieldThreadingInHoverBreadcrumbEnabled = true;
+  public isPropertyFieldThreadingInHoverBreadcrumbEnabled = false;
   public isPropertyFieldThreadingInMainUiEnabled = true;
   public isRememberAllNestedPropertiesExpansionToggleStateEnabled = true;
   public isRememberFullKeyNamesExpansionToggleStateEnabled = true;

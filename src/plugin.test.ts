@@ -173,9 +173,9 @@ const MockPropertyFieldVisualsComponent = vi.mocked(PropertyFieldVisualsComponen
 const manifest: PluginManifest = {
   author: 'test',
   description: 'test',
-  id: 'nested-properties',
+  id: 'nested-properties-advanced',
   minAppVersion: '1.0.0',
-  name: 'Nested Properties',
+  name: 'Nested Properties Advanced',
   version: '1.0.0'
 };
 

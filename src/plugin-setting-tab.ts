@@ -64,11 +64,12 @@ export class NestedPropertiesPluginSettingTab extends PluginSettingTab {
       ]),
       this.group('Property Field Hover Breadcrumb', [
         this.toggle('isPropertyFieldHoverBreadcrumbEnabled', 'Property Field Hover Breadcrumb', 'Show a floating, clickable ancestor hierarchy while hovering a property field using the selected activation scope.', ['property ancestry popover', 'hover path', 'field breadcrumb']),
-        this.toggle('isFullWidthPropertyFieldHoverActivationEnabled', 'Full-Width Property Field Hover Activation', 'Activate the breadcrumb anywhere across the full property row, including its key and value. This scope takes priority over the key-only scope.', ['whole property row breadcrumb', 'key and value hover popover', 'full field activation'], isBreadcrumbOff),
-        this.toggle('isFullWidthPropertyKeyHoverActivationEnabled', 'Full-Width Property Key Hover Activation', 'Activate the breadcrumb anywhere across the property key. When both scope toggles are off, only the property icon or Source-mode expansion toggle activates it.', ['property key hover popover', 'key width breadcrumb', 'icon fallback activation'], isBreadcrumbOff),
         this.toggle('isPropertyFieldHoverBreadcrumbInLivePreviewEnabled', 'Hover Breadcrumb in Live Preview', 'Show the property-field breadcrumb in Live Preview.', ['live preview popover', 'wysiwyg breadcrumb'], isBreadcrumbOff),
         this.toggle('isPropertyFieldHoverBreadcrumbInSourceModeEnabled', 'Hover Breadcrumb in Source Mode', 'Show the property-field breadcrumb while hovering raw frontmatter in Source mode.', ['raw yaml breadcrumb', 'source popover'], isBreadcrumbOff),
-        this.toggle('isPropertyFieldHoverBreadcrumbInReadingModeEnabled', 'Hover Breadcrumb in Reading Mode', 'Show the property-field breadcrumb in Reading mode.', ['rendered properties breadcrumb', 'reading popover'], isBreadcrumbOff)
+        this.toggle('isPropertyFieldHoverBreadcrumbInReadingModeEnabled', 'Hover Breadcrumb in Reading Mode', 'Show the property-field breadcrumb in Reading mode.', ['rendered properties breadcrumb', 'reading popover'], isBreadcrumbOff),
+        this.subheading('Property Field Hover Breadcrumb Activation Scope', 'Choose whether the breadcrumb activates across the whole field, the whole key, or only the property icon/Source expansion control.'),
+        this.toggle('isFullWidthPropertyFieldHoverActivationEnabled', 'Full-Width Property Field Hover Activation', 'Activate the breadcrumb anywhere across the full property row, including its key and value. This scope takes priority over the key-only scope.', ['whole property row breadcrumb', 'key and value hover popover', 'full field activation'], isBreadcrumbOff),
+        this.toggle('isFullWidthPropertyKeyHoverActivationEnabled', 'Full-Width Property Key Hover Activation', 'Activate the breadcrumb anywhere across the property key, including its icon or Source-mode expansion toggle. When both scope toggles are off, only that icon or expansion toggle activates it.', ['property key hover popover', 'key width breadcrumb', 'icon fallback activation'], isBreadcrumbOff)
       ]),
       this.group('Static Tree Indentation Guides', [
         this.toggle('isNestedPropertiesMainUiStaticTreeIndentationGuidesEnabled', 'Main UI Static Tree Indentation Guides', 'Show continuous sibling spines and horizontal connectors in the main Properties UI.', ['property tree guides', 'main ui indentation lines', 'static property spines']),
@@ -76,8 +77,8 @@ export class NestedPropertiesPluginSettingTab extends PluginSettingTab {
       ]),
       this.group('Property Field Threading', [
         this.toggle('isPropertyFieldThreadingEnabled', 'Enable Property Field Threading', 'Globally enable active property-tree path and branch highlighting.', ['logseq property path', 'property tree highlight', 'field threading']),
-        this.toggle('isPropertyFieldThreadingInMainUiEnabled', 'Property Field Threading in Main UI', 'Render enabled threading modes over the main Properties UI.', ['thread properties editor', 'thread main properties panel'], isThreadingOff),
-        this.toggle('isPropertyFieldThreadingInHoverBreadcrumbEnabled', 'Property Field Threading in Hover Breadcrumb', 'Render enabled threading modes inside the hover breadcrumb.', ['thread breadcrumb', 'thread popover tree'], () => isThreadingOff() || isBreadcrumbOff()),
+        this.toggle('isPropertyFieldThreadingInMainUiEnabled', 'Main UI Property Field Threading', 'Render enabled threading modes over the main Properties UI.', ['thread properties editor', 'thread main properties panel'], isThreadingOff),
+        this.toggle('isPropertyFieldThreadingInHoverBreadcrumbEnabled', 'Hover Breadcrumb Property Field Threading', 'Render enabled threading modes inside the hover breadcrumb.', ['thread breadcrumb', 'thread popover tree'], () => isThreadingOff() || isBreadcrumbOff()),
         this.toggle('isActiveCursorPropertyFieldThreadingEnabled', 'Active Cursor Property Field Threading', 'Use the focused property field instead of pointer hover to activate all enabled regular and root-level threading modes.', ['caret property thread', 'focused field threading', 'cursor activated property path'], isThreadingOff),
         this.toggle('isActivePropertyFieldThreadingEnabled', 'Active Property Field Threading', 'Highlight the complete nested path to the active property key or value.', ['active property path', 'hovered field ancestors'], isThreadingOff),
         this.toggle('isActivePropertyFieldThreadingInMainUiEnabled', 'Active Property Field Threading in Main UI', 'Show the active-field path in the main Properties UI.', ['active path main ui'], () => isMainUiThreadingOff() || !settings.isActivePropertyFieldThreadingEnabled),
@@ -123,6 +124,17 @@ export class NestedPropertiesPluginSettingTab extends PluginSettingTab {
 
   private group(heading: string, items: SettingGroupItem<BooleanSettingsKey>[]): SettingDefinitionItem<BooleanSettingsKey> {
     return { heading, items, type: 'group' };
+  }
+
+  private subheading(name: string, desc: string): SettingGroupItem<BooleanSettingsKey> {
+    return {
+      aliases: ['breadcrumb activation scope', 'hover activation width'],
+      desc,
+      name,
+      render: (setting): void => {
+        setting.setHeading();
+      }
+    };
   }
 
   private toggle(key: BooleanSettingsKey, name: string, desc: string, aliases: string[], isDisabled?: () => boolean): SettingGroupItem<BooleanSettingsKey> {

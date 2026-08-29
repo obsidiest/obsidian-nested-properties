@@ -88,15 +88,15 @@ describe('full key display command', () => {
 
         // Normalize to collapsed key names so the assertions do not depend on remembered state.
         if (metadataContainer.hasClass('nested-properties-full-key-display')) {
-          app.commands.executeCommandById('nested-properties:toggle-full-key-display');
+          app.commands.executeCommandById('nested-properties-advanced:toggle-full-key-display');
           await sleep(SETTLE_IN_MILLISECONDS);
         }
 
         const before = measure();
-        app.commands.executeCommandById('nested-properties:toggle-full-key-display');
+        app.commands.executeCommandById('nested-properties-advanced:toggle-full-key-display');
         await sleep(SETTLE_IN_MILLISECONDS);
         const afterOn = measure();
-        app.commands.executeCommandById('nested-properties:toggle-full-key-display');
+        app.commands.executeCommandById('nested-properties-advanced:toggle-full-key-display');
         await sleep(SETTLE_IN_MILLISECONDS);
         const afterOff = measure();
 
@@ -168,15 +168,15 @@ describe('full key display command', () => {
 
         // Normalize to the disabled state so the assertions do not depend on earlier tests.
         if (metadataContainer.hasClass('nested-properties-full-key-display')) {
-          app.commands.executeCommandById('nested-properties:toggle-full-key-display');
+          app.commands.executeCommandById('nested-properties-advanced:toggle-full-key-display');
           await sleep(SETTLE_IN_MILLISECONDS);
         }
 
         const before = measure();
-        app.commands.executeCommandById('nested-properties:toggle-full-key-display');
+        app.commands.executeCommandById('nested-properties-advanced:toggle-full-key-display');
         await sleep(SETTLE_IN_MILLISECONDS);
         const afterOn = measure();
-        app.commands.executeCommandById('nested-properties:toggle-full-key-display');
+        app.commands.executeCommandById('nested-properties-advanced:toggle-full-key-display');
         await sleep(SETTLE_IN_MILLISECONDS);
         const afterOff = measure();
 
@@ -239,15 +239,15 @@ describe('full key display command', () => {
 
         // Normalize to the disabled state so the assertions do not depend on earlier tests.
         if (metadataContainer.hasClass('nested-properties-full-key-display')) {
-          app.commands.executeCommandById('nested-properties:toggle-full-key-display');
+          app.commands.executeCommandById('nested-properties-advanced:toggle-full-key-display');
           await sleep(SETTLE_IN_MILLISECONDS);
         }
 
         const before = measure();
-        app.commands.executeCommandById('nested-properties:toggle-full-key-display');
+        app.commands.executeCommandById('nested-properties-advanced:toggle-full-key-display');
         await sleep(SETTLE_IN_MILLISECONDS);
         const afterOn = measure();
-        app.commands.executeCommandById('nested-properties:toggle-full-key-display');
+        app.commands.executeCommandById('nested-properties-advanced:toggle-full-key-display');
         await sleep(SETTLE_IN_MILLISECONDS);
         const afterOff = measure();
 
@@ -349,9 +349,9 @@ describe('full key display command', () => {
     const result = await evalInObsidian({
       callback: async ({ app }) => {
         const SETTLE_IN_MILLISECONDS = 300;
-        const PLUGIN_ID = 'nested-properties';
+        const PLUGIN_ID = 'nested-properties-advanced';
         const FULL_KEY_CLASS = 'nested-properties-full-key-display';
-        const TOGGLE_COMMAND_ID = 'nested-properties:toggle-full-key-display';
+        const TOGGLE_COMMAND_ID = 'nested-properties-advanced:toggle-full-key-display';
 
         const file = app.vault.getFileByPath('full-key.md');
         if (!file) {

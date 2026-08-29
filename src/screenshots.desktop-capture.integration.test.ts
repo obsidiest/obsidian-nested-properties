@@ -55,7 +55,7 @@ interface ResizableSideDock {
   setSize(this: void, size: number): void;
 }
 
-const PLUGIN_ID = 'nested-properties';
+const PLUGIN_ID = 'nested-properties-advanced';
 const WIDTH_IN_PIXELS = 1200;
 const HEIGHT_IN_PIXELS = 800;
 
