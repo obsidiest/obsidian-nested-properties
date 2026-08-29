@@ -1,6 +1,4 @@
-# Nested Properties
-
-[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-ffdd00?logo=buy-me-a-coffee&logoColor=black)](https://www.buymeacoffee.com/mnaoumov) [![GitHub release](https://img.shields.io/github/v/release/mnaoumov/obsidian-nested-properties)](https://github.com/mnaoumov/obsidian-nested-properties/releases) [![GitHub downloads](https://img.shields.io/github/downloads/mnaoumov/obsidian-nested-properties/total)](https://github.com/mnaoumov/obsidian-nested-properties/releases) [![Coverage: 100%](https://img.shields.io/badge/coverage-100%25-brightgreen)](https://github.com/mnaoumov/obsidian-nested-properties)
+# Nested Properties Advanced
 
 YAML frontmatter nests, but [Obsidian](https://obsidian.md/)'s Properties editor does not. Give a note a nested structure and the panel shows you nothing useful — the values are there in the file, and the only way to read or change them is to edit the raw YAML by hand and hope you get the indentation right.
 
@@ -19,8 +17,6 @@ level1Nested:
         level5simple: simple5
 ---
 ```
-
-Inspired by this [feature request](https://forum.obsidian.md/t/properties-bases-support-multi-level-yaml-mapping-of-mappings-nested-attributes/63826).
 
 <!-- markdownlint-disable MD033 -->
 
@@ -68,7 +64,6 @@ A copy of the vault ships with every release. You can access it via any of the f
 
 ## Installation
 
-The plugin is available in [the official Community Plugins repository](https://community.obsidian.md/plugins/nested-properties).
 
 ### Beta versions
 
@@ -90,26 +85,10 @@ window.DEBUG.enable('nested-properties');
 
 For more details, refer to the [documentation](https://mnaoumov.dev/obsidian-dev-utils/guides/debugging/).
 
-## Changelog
+## Attributions
 
-All notable changes to this project will be documented in the [CHANGELOG](./CHANGELOG.md).
 
-## Contributing
-
-Contributions are welcome — see [CONTRIBUTING](./CONTRIBUTING.md) to get set up.
-
-## Support
-
-<!-- markdownlint-disable MD033 -->
-
-<a href="https://www.buymeacoffee.com/mnaoumov" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" height="60" width="217"></a>
-
-<!-- markdownlint-enable MD033 -->
-
-## My other Obsidian resources
-
-[See my other Obsidian resources](https://github.com/mnaoumov/obsidian-resources).
 
 ## License
 
-© [Michael Naumov](https://github.com/mnaoumov/)
+MIT
