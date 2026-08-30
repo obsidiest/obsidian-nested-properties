@@ -3,10 +3,14 @@
 ## 2.0.0
 
 - breaking: rename the plugin, manifest ID, command namespace, release assets, and installation folder to Nested Properties Advanced (`nested-properties-advanced`)
-- fix: preserve Live Preview property edits in Obsidian's undo history so Ctrl+Y can redo a change after Ctrl+Z
+- fix: restore Ctrl+Y after an escaped Live Preview property edit by preserving native handling first, then replaying the exact captured metadata transaction only when both native redo paths remain unchanged
 - fix: use geometric property-row hit testing so threading and hover-breadcrumb scopes cover their configured full widths
 - fix: map Source-mode hover targets through editor coordinates so root, flattened, repeated, and nested fields resolve reliably
 - fix: suppress the native ancestor-tree focus background while Highlight Active Property Field Tree is disabled
+- feat: add default-enabled Live Preview, Source, and Reading-mode visibility switches for main-UI property threading and static tree indentation guides
+- feat: render static guides and active property threading alongside raw Source-mode frontmatter
+- feat: wrap complete hover-breadcrumb property names by default behind a searchable expansion switch
+- fix: widen the default hover breadcrumb and inset its root guide so long names wrap legibly and the top-level spine is not clipped
 - feat: add separate themed Style Settings controls for active-tree background and outline colors, with neutral gray and black defaults
 - fix: make nested object keys editable in Live Preview while keeping structural array indices read-only
 - fix: activate property threading across the full property key/value row, including Source-mode root and flattened fields

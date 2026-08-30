@@ -9,27 +9,37 @@ import {
 import type { PropertyFieldNode } from './property-field-tree.ts';
 
 import {
+  applyRecordedPropertyEditRedo,
   applyRedoFallback,
   buildRoundedPath,
+  computeTextReplacement,
   createCssNumberReader,
   findElementAtClientY,
   flattenVisiblePropertyFieldForest,
   getBreadcrumbKeyboardTarget,
   getPropertyFieldMutationContainers,
   getShownMetadataContainers,
+  getShownSourceViews,
   getSourceKeyCharacterRange,
   getThreadDepthColorIndex,
   isContainerRenderCurrent,
   isPropertyFieldMutation,
   isPropertyVisualStyleMutation,
   isRedoShortcut,
+  isSourceEditorMutation,
   resolveBreadcrumbActivationScope,
   resolveDomBreadcrumbPropertyAtPointer,
   resolveDomPropertyAtPointer,
   resolveSourceBreadcrumbLineAtPointer,
   resolveSourceLine,
-  resolveSourceLineElementAtPointer
+  resolveSourceLineElementAtPointer,
+  shouldUsePropertyRedoFallback
 } from './property-field-visuals.ts';
+
+interface TestEditorPosition {
+  ch: number;
+  line: number;
+}
 
 type VisualMutation = Parameters<typeof isPropertyFieldMutation>[0];
 
@@ -205,6 +215,26 @@ describe('property field visual render guards', () => {
     expect(isRedoShortcut({ altKey: false, ctrlKey: false, key: 'y', metaKey: true, shiftKey: false })).toBe(false);
   });
 
+  it('should preserve native editing history except after leaving a Live Preview property editor', () => {
+    const input = document.body.createEl('input');
+    const sourceView = document.body.createDiv({ cls: 'markdown-source-view' });
+    const sourceContent = sourceView.createDiv({ attr: { contenteditable: 'true' }, cls: 'cm-content' });
+    const livePreviewView = document.body.createDiv({ cls: ['markdown-source-view', 'is-live-preview'] });
+    const livePreviewContent = livePreviewView.createDiv({ attr: { contenteditable: 'true' }, cls: 'cm-content' });
+    const metadataContainer = livePreviewContent.createDiv({ cls: 'metadata-container' });
+    const propertyEditor = metadataContainer.createDiv({ attr: { contenteditable: 'true' } });
+
+    expect(shouldUsePropertyRedoFallback(document.body)).toBe(true);
+    expect(shouldUsePropertyRedoFallback(input)).toBe(false);
+    expect(shouldUsePropertyRedoFallback(sourceContent)).toBe(false);
+    expect(shouldUsePropertyRedoFallback(livePreviewContent)).toBe(true);
+    expect(shouldUsePropertyRedoFallback(propertyEditor)).toBe(false);
+
+    input.remove();
+    sourceView.remove();
+    livePreviewView.remove();
+  });
+
   it('should invoke the redo fallback only when Obsidian did not already handle the shortcut', () => {
     const redo = vi.fn();
     expect(applyRedoFallback({ getValue: () => 'unchanged', redo }, 'unchanged')).toBe(true);
@@ -212,6 +242,26 @@ describe('property field visual render guards', () => {
 
     expect(applyRedoFallback({ getValue: () => 'native redo result', redo }, 'before redo')).toBe(false);
     expect(redo).toHaveBeenCalledTimes(1);
+  });
+
+  it('should replay an exact captured Properties edit after Ctrl+Z when native redo is empty', () => {
+    let value = '---\nroot: before\n---';
+    const replaceRange = vi.fn((replacement: string, from: TestEditorPosition, to: TestEditorPosition): void => {
+      value = value.slice(0, from.ch) + replacement + value.slice(to.ch);
+    });
+    const editor = {
+      getValue: (): string => value,
+      offsetToPos: (offset: number): TestEditorPosition => ({ ch: offset, line: 0 }),
+      redo: vi.fn(),
+      replaceRange
+    };
+
+    expect(computeTextReplacement(value, '---\nroot: after\n---')).toEqual({ end: 16, replacement: 'after', start: 10 });
+    expect(applyRecordedPropertyEditRedo(editor, { after: '---\nroot: after\n---', before: value })).toBe(true);
+    expect(value).toBe('---\nroot: after\n---');
+    expect(replaceRange).toHaveBeenCalledTimes(1);
+    expect(applyRecordedPropertyEditRedo(editor, { after: 'different', before: 'unrelated' })).toBe(false);
+    expect(computeTextReplacement(value, value)).toBeNull();
   });
 
   it('should disambiguate duplicate Source-mode keys from surrounding visible YAML lines', () => {
@@ -289,6 +339,19 @@ describe('property field visual render guards', () => {
     hiddenParent.remove();
   });
 
+  it('should render only shown full Source-mode editor views', () => {
+    const source = document.body.createDiv({ cls: 'markdown-source-view mod-cm6' });
+    const livePreview = document.body.createDiv({ cls: 'markdown-source-view mod-cm6 is-live-preview' });
+    const hidden = document.body.createDiv({ cls: 'markdown-source-view mod-cm6' });
+    vi.spyOn(source, 'isShown').mockReturnValue(true);
+    vi.spyOn(hidden, 'isShown').mockReturnValue(false);
+
+    expect(getShownSourceViews(document)).toEqual([source]);
+    source.remove();
+    livePreview.remove();
+    hidden.remove();
+  });
+
   it('should reuse a container render until its generation, dimensions, or active field changes', () => {
     const activeElement = document.body.createDiv();
     const snapshot = { activeElement, generation: 4, height: 200, width: 300 };
@@ -341,6 +404,23 @@ describe('property field visual mutation filters', () => {
     expect(getPropertyFieldMutationContainers(createMutation(document.body, [leaf]))).toEqual([]);
     metadata.remove();
     leaf.remove();
+  });
+
+  it('should redraw Source overlays for visible CodeMirror line changes but ignore Live Preview churn', () => {
+    const sourceView = document.body.createDiv({ cls: 'markdown-source-view mod-cm6' });
+    const sourceContent = sourceView.createDiv({ cls: 'cm-content' });
+    const sourceLine = sourceContent.createDiv({ cls: 'cm-line' });
+    const liveView = document.body.createDiv({ cls: 'markdown-source-view mod-cm6 is-live-preview' });
+    const liveContent = liveView.createDiv({ cls: 'cm-content' });
+    const liveLine = liveContent.createDiv({ cls: 'cm-line' });
+    const overlay = sourceView.createSvg('svg');
+    overlay.classList.add('np-property-source-overlay');
+
+    expect(isSourceEditorMutation(createMutation(sourceContent, [sourceLine]))).toBe(true);
+    expect(isSourceEditorMutation(createMutation(liveContent, [liveLine]))).toBe(false);
+    expect(isSourceEditorMutation(createMutation(overlay, [overlay.createSvg('path')]))).toBe(false);
+    sourceView.remove();
+    liveView.remove();
   });
 
   it('should redraw only for plugin-owned body classes and style variables', () => {

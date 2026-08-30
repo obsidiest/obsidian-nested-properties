@@ -22,7 +22,7 @@ This note's own properties form several nested branches. Use them to try the vis
 
 1. Open **Settings → Nested Properties Advanced**. **Property Field Hover Breadcrumb** is enabled by default and can be switched off globally or by view mode.
 2. By default, hover anywhere across a property key. Enable **Full-Width Property Field Hover Activation** to include the value and the rest of the row, or disable both activation-scope switches to require the property icon in Live Preview/Reading mode or the left-side expansion toggle in Source mode.
-3. Try the selected activation scope above this note in Live Preview, then switch to Source and Reading modes.
+3. Try the selected activation scope above this note in Live Preview, then switch to Source and Reading modes. Long breadcrumb names wrap by default; disable **Full Property Field Name Expansion in a Property Field Hover Breadcrumb** to compare the compact presentation.
 4. Move through the breadcrumb with the arrow, Home, and End keys. Click a row to focus that field.
 5. Enable **Property Field Threading**. Compare active-field, all-branches, root-level, and cursor activation while moving between `project`, `contributors`, and their descendants.
 6. Install and enable **Style Settings**, then open **Nested Properties Advanced** there to adjust guide lines, depth colors, breadcrumb sizing, typography, and spacing. Every numerical slider has a synchronized precise text box.
@@ -48,6 +48,7 @@ The plugin's searchable settings page exposes every persisted switch below. Chil
 - `isPerNoteToggleFullKeyNamesEnabled`
 - `isHighlightActivePropertyFieldTreeEnabled`
 - `isPropertyFieldHoverBreadcrumbEnabled`
+- `isFullPropertyFieldNameExpansionInHoverBreadcrumbEnabled`
 - `isFullWidthPropertyFieldHoverActivationEnabled`
 - `isFullWidthPropertyKeyHoverActivationEnabled`
 - `isPropertyFieldHoverBreadcrumbInLivePreviewEnabled`
@@ -55,9 +56,15 @@ The plugin's searchable settings page exposes every persisted switch below. Chil
 - `isPropertyFieldHoverBreadcrumbInReadingModeEnabled`
 - `isPropertyFieldHoverBreadcrumbStaticTreeIndentationGuidesEnabled`
 - `isNestedPropertiesMainUiStaticTreeIndentationGuidesEnabled`
+- `isNestedPropertiesMainUiStaticTreeIndentationGuidesInLivePreviewEnabled`
+- `isNestedPropertiesMainUiStaticTreeIndentationGuidesInSourceModeEnabled`
+- `isNestedPropertiesMainUiStaticTreeIndentationGuidesInReadingModeEnabled`
 - `isPropertyFieldThreadingEnabled`
 - `isPropertyFieldThreadingInMainUiEnabled`
 - `isPropertyFieldThreadingInHoverBreadcrumbEnabled`
+- `isPropertyFieldThreadingInLivePreviewEnabled`
+- `isPropertyFieldThreadingInSourceModeEnabled`
+- `isPropertyFieldThreadingInReadingModeEnabled`
 - `isActiveCursorPropertyFieldThreadingEnabled`
 - `isActivePropertyFieldThreadingEnabled`
 - `isActivePropertyFieldThreadingInMainUiEnabled`

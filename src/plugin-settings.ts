@@ -15,6 +15,7 @@ export class PluginSettings {
   public isAllBranchesOfActiveRootLevelPropertyFieldTreeThreadingEnabled = false;
   public isAllBranchesOfActiveRootLevelPropertyFieldTreeThreadingInHoverBreadcrumbEnabled = true;
   public isAllBranchesOfActiveRootLevelPropertyFieldTreeThreadingInMainUiEnabled = true;
+  public isFullPropertyFieldNameExpansionInHoverBreadcrumbEnabled = true;
   public isFullWidthPropertyFieldHoverActivationEnabled = false;
   public isFullWidthPropertyKeyHoverActivationEnabled = true;
   public isGlobalCollapseAllNestedPropertiesEnabled = false;
@@ -25,6 +26,9 @@ export class PluginSettings {
   public isGlobalToggleFullKeyNamesEnabled = true;
   public isHighlightActivePropertyFieldTreeEnabled = false;
   public isNestedPropertiesMainUiStaticTreeIndentationGuidesEnabled = true;
+  public isNestedPropertiesMainUiStaticTreeIndentationGuidesInLivePreviewEnabled = true;
+  public isNestedPropertiesMainUiStaticTreeIndentationGuidesInReadingModeEnabled = true;
+  public isNestedPropertiesMainUiStaticTreeIndentationGuidesInSourceModeEnabled = true;
   public isPerNoteToggleAllNestedPropertiesEnabled = true;
   public isPerNoteToggleFullKeyNamesEnabled = true;
   public isPropertyFieldHoverBreadcrumbEnabled = true;
@@ -34,7 +38,10 @@ export class PluginSettings {
   public isPropertyFieldHoverBreadcrumbStaticTreeIndentationGuidesEnabled = true;
   public isPropertyFieldThreadingEnabled = false;
   public isPropertyFieldThreadingInHoverBreadcrumbEnabled = false;
+  public isPropertyFieldThreadingInLivePreviewEnabled = true;
   public isPropertyFieldThreadingInMainUiEnabled = true;
+  public isPropertyFieldThreadingInReadingModeEnabled = true;
+  public isPropertyFieldThreadingInSourceModeEnabled = true;
   public isRememberAllNestedPropertiesExpansionToggleStateEnabled = true;
   public isRememberFullKeyNamesExpansionToggleStateEnabled = true;
   public isRememberLastUsedMainUiToggleStatesEnabled = true;

@@ -47,7 +47,7 @@ describe('property field feature release quality', () => {
     const settingTabSource = readRepoFile('src/plugin-setting-tab.ts');
     const settingKeys = [...settingsSource.matchAll(/public (?<key>is\w+) =/gu)].map((match) => match.groups?.['key']).filter((settingKey): settingKey is string => settingKey !== undefined);
 
-    expect(settingKeys).toHaveLength(37);
+    expect(settingKeys).toHaveLength(44);
     for (const settingKey of settingKeys) {
       expect(settingTabSource).toContain(`'${settingKey}'`);
     }
@@ -65,6 +65,16 @@ describe('property field feature release quality', () => {
       expect(styleSource).toContain(`np-thread-color-${String(depth)}-enabled`);
       expect(styleSource).toContain(`np-thread-color-${String(depth)}`);
     }
+  });
+
+  it('should ship mode-aware source visuals, wrapped breadcrumb names, and opt-in tree highlighting', () => {
+    const styleSource = readRepoFile('src/styles/main.scss');
+
+    expect(styleSource).toContain('.np-property-source-overlay');
+    expect(styleSource).toContain('.np-full-property-field-name-expansion-enabled');
+    expect(styleSource).toContain('--np-breadcrumb-min-width: 320px');
+    expect(styleSource).toContain('body:not(.np-highlight-active-property-field-tree-enabled)');
+    expect(styleSource).toContain(':has(.metadata-property :focus-within)');
   });
 
   it('should attest every release asset with the required GitHub permissions', () => {

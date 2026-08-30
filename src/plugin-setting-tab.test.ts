@@ -84,6 +84,9 @@ describe('NestedPropertiesPluginSettingTab', () => {
     expect(items.map((item) => item.name)).toContain('Property Field Hover Breadcrumb Activation Scope');
     expect(items.map((item) => item.name)).toContain('Main UI Property Field Threading');
     expect(items.map((item) => item.name)).toContain('Hover Breadcrumb Property Field Threading');
+    expect(items.map((item) => item.name)).toContain('Full Property Field Name Expansion in a Property Field Hover Breadcrumb');
+    expect(items.map((item) => item.name)).toContain('Property Field Threading in Source Mode');
+    expect(items.map((item) => item.name)).toContain('Static Tree Indentation Guides in Source Mode');
     const setHeading = vi.fn();
     items.find((item) => item.name === 'Property Field Hover Breadcrumb Activation Scope')?.render?.({ setHeading });
     expect(setHeading).toHaveBeenCalledTimes(1);
@@ -150,6 +153,7 @@ describe('NestedPropertiesPluginSettingTab', () => {
         'isPropertyFieldHoverBreadcrumbInSourceModeEnabled',
         'isPropertyFieldHoverBreadcrumbInReadingModeEnabled',
         'isPropertyFieldHoverBreadcrumbStaticTreeIndentationGuidesEnabled',
+        'isFullPropertyFieldNameExpansionInHoverBreadcrumbEnabled',
         'isFullWidthPropertyFieldHoverActivationEnabled',
         'isFullWidthPropertyKeyHoverActivationEnabled'
       ] as const
@@ -163,6 +167,7 @@ describe('NestedPropertiesPluginSettingTab', () => {
         'isPropertyFieldHoverBreadcrumbInSourceModeEnabled',
         'isPropertyFieldHoverBreadcrumbInReadingModeEnabled',
         'isPropertyFieldHoverBreadcrumbStaticTreeIndentationGuidesEnabled',
+        'isFullPropertyFieldNameExpansionInHoverBreadcrumbEnabled',
         'isFullWidthPropertyFieldHoverActivationEnabled',
         'isFullWidthPropertyKeyHoverActivationEnabled'
       ] as const
@@ -172,6 +177,9 @@ describe('NestedPropertiesPluginSettingTab', () => {
 
     settings.isPropertyFieldThreadingEnabled = false;
     expect(isDisabled('isPropertyFieldThreadingInMainUiEnabled')).toBe(true);
+    expect(isDisabled('isPropertyFieldThreadingInLivePreviewEnabled')).toBe(true);
+    expect(isDisabled('isPropertyFieldThreadingInSourceModeEnabled')).toBe(true);
+    expect(isDisabled('isPropertyFieldThreadingInReadingModeEnabled')).toBe(true);
     expect(isDisabled('isPropertyFieldThreadingInHoverBreadcrumbEnabled')).toBe(true);
     expect(isDisabled('isActiveRootLevelPropertyFieldThreadingEnabled')).toBe(true);
     settings.isPropertyFieldThreadingEnabled = true;
@@ -181,8 +189,14 @@ describe('NestedPropertiesPluginSettingTab', () => {
     expect(isDisabled('isPropertyFieldThreadingInHoverBreadcrumbEnabled')).toBe(false);
 
     settings.isPropertyFieldThreadingInMainUiEnabled = false;
+    expect(isDisabled('isPropertyFieldThreadingInLivePreviewEnabled')).toBe(true);
+    expect(isDisabled('isPropertyFieldThreadingInSourceModeEnabled')).toBe(true);
+    expect(isDisabled('isPropertyFieldThreadingInReadingModeEnabled')).toBe(true);
     expect(isDisabled('isActivePropertyFieldThreadingInMainUiEnabled')).toBe(true);
     settings.isPropertyFieldThreadingInMainUiEnabled = true;
+    expect(isDisabled('isPropertyFieldThreadingInLivePreviewEnabled')).toBe(false);
+    expect(isDisabled('isPropertyFieldThreadingInSourceModeEnabled')).toBe(false);
+    expect(isDisabled('isPropertyFieldThreadingInReadingModeEnabled')).toBe(false);
     settings.isActivePropertyFieldThreadingEnabled = false;
     expect(isDisabled('isActivePropertyFieldThreadingInMainUiEnabled')).toBe(true);
     settings.isActivePropertyFieldThreadingEnabled = true;
@@ -222,6 +236,15 @@ describe('NestedPropertiesPluginSettingTab', () => {
     settings.isAllBranchesOfActiveRootLevelPropertyFieldTreeThreadingEnabled = true;
     expect(isDisabled('isAllBranchesOfActiveRootLevelPropertyFieldTreeThreadingInMainUiEnabled')).toBe(false);
     expect(isDisabled('isAllBranchesOfActiveRootLevelPropertyFieldTreeThreadingInHoverBreadcrumbEnabled')).toBe(false);
+
+    settings.isNestedPropertiesMainUiStaticTreeIndentationGuidesEnabled = false;
+    expect(isDisabled('isNestedPropertiesMainUiStaticTreeIndentationGuidesInLivePreviewEnabled')).toBe(true);
+    expect(isDisabled('isNestedPropertiesMainUiStaticTreeIndentationGuidesInSourceModeEnabled')).toBe(true);
+    expect(isDisabled('isNestedPropertiesMainUiStaticTreeIndentationGuidesInReadingModeEnabled')).toBe(true);
+    settings.isNestedPropertiesMainUiStaticTreeIndentationGuidesEnabled = true;
+    expect(isDisabled('isNestedPropertiesMainUiStaticTreeIndentationGuidesInLivePreviewEnabled')).toBe(false);
+    expect(isDisabled('isNestedPropertiesMainUiStaticTreeIndentationGuidesInSourceModeEnabled')).toBe(false);
+    expect(isDisabled('isNestedPropertiesMainUiStaticTreeIndentationGuidesInReadingModeEnabled')).toBe(false);
   });
 
   it('should read, validate, persist, and refresh control values', async () => {

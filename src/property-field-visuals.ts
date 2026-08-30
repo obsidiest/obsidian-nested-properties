@@ -23,7 +23,9 @@ import {
 
 const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
 const POPOVER_HIDE_DELAY_IN_MILLISECONDS = 120;
-const OWNED_VISUAL_SELECTOR = '.np-property-tree-overlay, .np-property-breadcrumb-popover';
+const PROPERTY_EDIT_CAPTURE_DELAYS_IN_MILLISECONDS = [0, 40, 120, 240] as const;
+const REDO_FALLBACK_DELAY_IN_MILLISECONDS = 40;
+const OWNED_VISUAL_SELECTOR = '.np-property-tree-overlay, .np-property-source-overlay, .np-property-breadcrumb-popover';
 const METADATA_CONTAINER_SELECTOR = '.metadata-container';
 const propertyFieldHitSnapshots = new WeakMap<HTMLElement, PropertyFieldHitSnapshot>();
 
@@ -59,9 +61,12 @@ interface DocumentState {
   hideTimer: number | null;
   hoveredBreadcrumbField: HTMLElement | null;
   hoveredThreadingField: HTMLElement | null;
+  lastPropertyEdit: PropertyEditTransaction | null;
   lastPropertyEditorView: MarkdownView | null;
   mutationObserver: MutationObserver | null;
   popover: HTMLElement | null;
+  propertyEditCaptureTimer: number | null;
+  propertyEditStart: PropertyEditStart | null;
   redoFallbackTimer: number | null;
   renderFrame: number | null;
   renderGeneration: number;
@@ -83,6 +88,26 @@ interface PropertyFieldVisualsComponentParams {
 interface RedoCapableEditor {
   getValue(): string;
   redo(): void;
+}
+
+interface TextEditingEditor extends RedoCapableEditor {
+  offsetToPos(offset: number): { ch: number; line: number };
+  replaceRange(replacement: string, from: { ch: number; line: number }, to?: { ch: number; line: number }): void;
+}
+
+interface PropertyEditStart {
+  before: string;
+  view: MarkdownView;
+}
+
+interface PropertyEditTransaction extends PropertyEditStart {
+  after: string;
+}
+
+export interface TextReplacement {
+  end: number;
+  replacement: string;
+  start: number;
 }
 
 interface Point {
@@ -173,6 +198,9 @@ export class PropertyFieldVisualsComponent extends Component {
       if (state.redoFallbackTimer !== null) {
         ownerDocument.defaultView?.clearTimeout(state.redoFallbackTimer);
       }
+      if (state.propertyEditCaptureTimer !== null) {
+        ownerDocument.defaultView?.clearTimeout(state.propertyEditCaptureTimer);
+      }
       state.popover?.remove();
       state.sourceHighlight?.classList.remove('np-property-field-source-highlight');
       removeVisualArtifacts(ownerDocument);
@@ -187,7 +215,7 @@ export class PropertyFieldVisualsComponent extends Component {
     }
     this.observeAllDocuments();
     for (const [ownerDocument, state] of this.documentStates) {
-      if (!this.isMainThreadingEnabled()) {
+      if (state.active !== null && !this.isMainThreadingEnabled(state.active.kind === 'source' ? 'source' : detectViewMode(state.active.element))) {
         state.active = null;
         state.sourceHighlight?.classList.remove('np-property-field-source-highlight');
         state.sourceHighlight = null;
@@ -202,6 +230,7 @@ export class PropertyFieldVisualsComponent extends Component {
   private applyBodyClasses(ownerDocument: Document): void {
     const settings = this.pluginSettingsComponent.settings;
     ownerDocument.body.classList.toggle('np-highlight-active-property-field-tree-enabled', settings.isHighlightActivePropertyFieldTreeEnabled);
+    ownerDocument.body.classList.toggle('np-full-property-field-name-expansion-enabled', settings.isFullPropertyFieldNameExpansionInHoverBreadcrumbEnabled);
     ownerDocument.body.classList.toggle('np-main-static-guides-enabled', settings.isNestedPropertiesMainUiStaticTreeIndentationGuidesEnabled);
     ownerDocument.body.classList.toggle('np-property-threading-enabled', settings.isPropertyFieldThreadingEnabled);
   }
@@ -223,9 +252,12 @@ export class PropertyFieldVisualsComponent extends Component {
       hideTimer: null,
       hoveredBreadcrumbField: null,
       hoveredThreadingField: null,
+      lastPropertyEdit: null,
       lastPropertyEditorView: null,
       mutationObserver: null,
       popover: null,
+      propertyEditCaptureTimer: null,
+      propertyEditStart: null,
       redoFallbackTimer: null,
       renderFrame: null,
       renderGeneration: 0,
@@ -250,6 +282,8 @@ export class PropertyFieldVisualsComponent extends Component {
       const container = target instanceof ownerDocument.defaultView!.Node ? asElement(target)?.closest<HTMLElement>(METADATA_CONTAINER_SELECTOR) ?? null : null;
       if (container !== null) {
         this.invalidateContainer(container);
+      } else if (target instanceof ownerDocument.defaultView!.Node && asElement(target)?.closest('.markdown-source-view:not(.is-live-preview)') !== null) {
+        this.invalidateDocument(ownerDocument);
       }
     };
     ownerDocument.addEventListener('scroll', scrollListener, { capture: true });
@@ -282,6 +316,9 @@ export class PropertyFieldVisualsComponent extends Component {
         let shouldRender = false;
         for (const mutation of mutations) {
           if (!isPropertyFieldMutation(mutation)) {
+            if (isSourceEditorMutation(mutation)) {
+              shouldRender = true;
+            }
             continue;
           }
           shouldRender = true;
@@ -341,11 +378,12 @@ export class PropertyFieldVisualsComponent extends Component {
       return;
     }
 
-    const isHoverThreadingEnabled = this.isMainThreadingEnabled() && !this.pluginSettingsComponent.settings.isActiveCursorPropertyFieldThreadingEnabled;
     const propertyElement = resolveDomPropertyAtPointer(target, event.clientX, event.clientY);
     const metadataContainer = propertyElement?.closest<HTMLElement>(METADATA_CONTAINER_SELECTOR) ?? null;
     if (propertyElement !== null && metadataContainer !== null) {
-      const isBreadcrumbEnabled = this.isBreadcrumbEnabled(detectViewMode(propertyElement));
+      const mode = detectViewMode(propertyElement);
+      const isBreadcrumbEnabled = this.isBreadcrumbEnabled(mode);
+      const isHoverThreadingEnabled = this.isMainThreadingEnabled(mode) && !this.pluginSettingsComponent.settings.isActiveCursorPropertyFieldThreadingEnabled;
       const breadcrumbElement = isBreadcrumbEnabled ? resolveDomBreadcrumbPropertyAtPointer(target, event.clientX, event.clientY, this.getBreadcrumbActivationScope()) : null;
       this.updateDomPointerActivation(ownerDocument, state, metadataContainer, breadcrumbElement, isHoverThreadingEnabled ? propertyElement : null);
       return;
@@ -357,6 +395,7 @@ export class PropertyFieldVisualsComponent extends Component {
       return;
     }
     const isBreadcrumbEnabled = this.isBreadcrumbEnabled('source');
+    const isHoverThreadingEnabled = this.isMainThreadingEnabled('source') && !this.pluginSettingsComponent.settings.isActiveCursorPropertyFieldThreadingEnabled;
     if (!isBreadcrumbEnabled && !isHoverThreadingEnabled) {
       this.clearPointerActivation(ownerDocument);
       return;
@@ -368,7 +407,7 @@ export class PropertyFieldVisualsComponent extends Component {
       return;
     }
     const isBreadcrumbStable = state.hoveredBreadcrumbField === breadcrumbLine && (breadcrumbLine === null || state.popover !== null);
-    const isThreadingStable = state.hoveredThreadingField === threadingLine && (threadingLine === null || (state.active?.kind === 'source' && state.sourceHighlight === threadingLine));
+    const isThreadingStable = state.hoveredThreadingField === threadingLine && (threadingLine === null || state.active?.kind === 'source');
     if (isBreadcrumbStable && isThreadingStable) {
       if (breadcrumbLine !== null) {
         this.cancelPopoverHide(ownerDocument);
@@ -409,13 +448,10 @@ export class PropertyFieldVisualsComponent extends Component {
     if (this.pluginSettingsComponent.settings.isActiveCursorPropertyFieldThreadingEnabled || state.active === null) {
       return;
     }
-    const shouldRender = state.active.kind === 'dom';
     state.active = null;
     state.sourceHighlight?.classList.remove('np-property-field-source-highlight');
     state.sourceHighlight = null;
-    if (shouldRender) {
-      this.scheduleRender(ownerDocument);
-    }
+    this.scheduleRender(ownerDocument);
   }
 
   private updateDomPointerActivation(ownerDocument: Document, state: DocumentState, metadataContainer: HTMLElement, breadcrumbElement: HTMLElement | null, threadingElement: HTMLElement | null): void {
@@ -496,13 +532,10 @@ export class PropertyFieldVisualsComponent extends Component {
     }
     const isThreadingChanged = state.hoveredThreadingField !== threadingLine || state.active?.kind !== 'source' || state.active.line !== sourceTarget.node.line;
     if (isThreadingChanged) {
-      const shouldClearDomOverlay = state.active?.kind === 'dom';
       state.hoveredThreadingField = threadingLine;
       state.active = { kind: 'source', line: sourceTarget.node.line, roots: sourceTarget.roots, view: sourceTarget.view };
       this.highlightSourceLine(ownerDocument, threadingLine);
-      if (shouldClearDomOverlay) {
-        this.scheduleRender(ownerDocument);
-      }
+      this.scheduleRender(ownerDocument);
     }
   }
 
@@ -513,7 +546,12 @@ export class PropertyFieldVisualsComponent extends Component {
       if (container !== null) {
         const state = this.documentStates.get(ownerDocument);
         if (state !== undefined) {
-          state.lastPropertyEditorView = this.findMarkdownView(ownerDocument, container);
+          const view = this.findMarkdownView(ownerDocument, container);
+          state.lastPropertyEditorView = view;
+          if (view !== null && state.propertyEditStart === null && isPropertyEditorTarget(target)) {
+            state.propertyEditStart = { before: view.editor.getValue(), view };
+          }
+          this.schedulePropertyEditCapture(ownerDocument, state);
         }
         this.invalidateContainer(container);
       }
@@ -529,9 +567,13 @@ export class PropertyFieldVisualsComponent extends Component {
     const metadataContainer = propertyElement?.closest<HTMLElement>('.metadata-container') ?? null;
     const state = this.documentStates.get(ownerDocument);
     if (metadataContainer !== null && state !== undefined) {
-      state.lastPropertyEditorView = this.findMarkdownView(ownerDocument, metadataContainer);
+      const view = this.findMarkdownView(ownerDocument, metadataContainer);
+      state.lastPropertyEditorView = view;
+      if (view !== null && isPropertyEditorTarget(target)) {
+        state.propertyEditStart = { before: view.editor.getValue(), view };
+      }
     }
-    if (!this.pluginSettingsComponent.settings.isActiveCursorPropertyFieldThreadingEnabled || !this.isMainThreadingEnabled()) {
+    if (!this.pluginSettingsComponent.settings.isActiveCursorPropertyFieldThreadingEnabled || propertyElement === null || !this.isMainThreadingEnabled(detectViewMode(propertyElement))) {
       return;
     }
     if (propertyElement !== null && metadataContainer !== null && state !== undefined) {
@@ -545,7 +587,7 @@ export class PropertyFieldVisualsComponent extends Component {
       return;
     }
     const activeElement = ownerDocument.activeElement;
-    if (activeElement instanceof ownerDocument.defaultView!.HTMLElement && activeElement.matches('input, textarea, [contenteditable="true"]')) {
+    if (activeElement instanceof ownerDocument.defaultView!.Element && !shouldUsePropertyRedoFallback(activeElement)) {
       return;
     }
     const state = this.documentStates.get(ownerDocument);
@@ -558,15 +600,28 @@ export class PropertyFieldVisualsComponent extends Component {
     if (state.redoFallbackTimer !== null) {
       win.clearTimeout(state.redoFallbackTimer);
     }
-    // Let Obsidian's own Ctrl+Y command run first. If it did not mutate the document after a
-    // Properties-field blur/Escape, invoke the active Markdown editor's native redo operation.
+    // Let Obsidian's own Ctrl+Y command run first. If its metadata-field history bridge did not
+    // Mutate the document, try the Markdown editor and finally replay the exact captured edit.
     state.redoFallbackTimer = win.setTimeout(() => {
-      state.redoFallbackTimer = null;
-      applyRedoFallback(view.editor, beforeRedo);
-    }, 0);
+      if (!applyRedoFallback(view.editor, beforeRedo)) {
+        state.redoFallbackTimer = null;
+        return;
+      }
+      state.redoFallbackTimer = win.setTimeout(() => {
+        state.redoFallbackTimer = null;
+        if (view.editor.getValue() === beforeRedo && state.lastPropertyEdit?.view === view) {
+          applyRecordedPropertyEditRedo(view.editor, state.lastPropertyEdit);
+        }
+      }, REDO_FALLBACK_DELAY_IN_MILLISECONDS);
+    }, REDO_FALLBACK_DELAY_IN_MILLISECONDS);
   }
 
   private onFocusOut(ownerDocument: Document, event: FocusEvent): void {
+    const target = event.target;
+    const state = this.documentStates.get(ownerDocument);
+    if (target instanceof ownerDocument.defaultView!.Element && target.closest(METADATA_CONTAINER_SELECTOR) !== null && state !== undefined) {
+      this.schedulePropertyEditCapture(ownerDocument, state);
+    }
     if (!this.pluginSettingsComponent.settings.isActiveCursorPropertyFieldThreadingEnabled) {
       return;
     }
@@ -574,7 +629,6 @@ export class PropertyFieldVisualsComponent extends Component {
     if (related instanceof ownerDocument.defaultView!.Element && related.closest('.metadata-property') !== null) {
       return;
     }
-    const state = this.documentStates.get(ownerDocument);
     if (state?.active?.kind === 'dom') {
       state.active = null;
       this.scheduleRender(ownerDocument);
@@ -583,7 +637,7 @@ export class PropertyFieldVisualsComponent extends Component {
 
   private onEditorCursorChanged(ownerDocument: Document): void {
     const settings = this.pluginSettingsComponent.settings;
-    if (!this.isMainThreadingEnabled() || !settings.isActiveCursorPropertyFieldThreadingEnabled) {
+    if (!this.isMainThreadingEnabled('source') || !settings.isActiveCursorPropertyFieldThreadingEnabled) {
       return;
     }
     const view = this.findMarkdownView(ownerDocument, ownerDocument.activeElement);
@@ -608,6 +662,33 @@ export class PropertyFieldVisualsComponent extends Component {
     if (state.popover !== null && node !== null) {
       this.showSourceBreadcrumb(ownerDocument, roots, node, ownerDocument.activeElement instanceof HTMLElement ? ownerDocument.activeElement : view.containerEl, view);
     }
+    this.scheduleRender(ownerDocument);
+  }
+
+  private schedulePropertyEditCapture(ownerDocument: Document, state: DocumentState, attempt = 0): void {
+    const editStart = state.propertyEditStart;
+    const win = ownerDocument.defaultView;
+    if (editStart === null || win === null) {
+      return;
+    }
+    if (state.propertyEditCaptureTimer !== null) {
+      win.clearTimeout(state.propertyEditCaptureTimer);
+    }
+    const delay = PROPERTY_EDIT_CAPTURE_DELAYS_IN_MILLISECONDS[attempt] ?? PROPERTY_EDIT_CAPTURE_DELAYS_IN_MILLISECONDS.at(-1)!;
+    state.propertyEditCaptureTimer = win.setTimeout(() => {
+      state.propertyEditCaptureTimer = null;
+      if (state.propertyEditStart !== editStart || !editStart.view.containerEl.isConnected) {
+        return;
+      }
+      const after = editStart.view.editor.getValue();
+      if (after !== editStart.before) {
+        state.lastPropertyEdit = { ...editStart, after };
+        return;
+      }
+      if (attempt + 1 < PROPERTY_EDIT_CAPTURE_DELAYS_IN_MILLISECONDS.length) {
+        this.schedulePropertyEditCapture(ownerDocument, state, attempt + 1);
+      }
+    }, delay);
   }
 
   private scheduleRender(ownerDocument: Document): void {
@@ -630,13 +711,14 @@ export class PropertyFieldVisualsComponent extends Component {
     for (const container of getShownMetadataContainers(ownerDocument)) {
       const active = state.active?.kind === 'dom' && state.active.container === container ? state.active : null;
       const activeElement = active?.element ?? null;
+      const mode = detectViewMode(container);
       const width = Math.max(container.scrollWidth, container.clientWidth);
       const height = Math.max(container.scrollHeight, container.clientHeight);
       const snapshot = this.containerRenderSnapshots.get(container);
       if (isContainerRenderCurrent(snapshot, state.renderGeneration, width, height, activeElement)) {
         continue;
       }
-      this.renderContainer(container, active, width, height);
+      this.renderContainer(container, active, width, height, mode);
       this.containerRenderSnapshots.set(container, {
         activeElement,
         generation: state.renderGeneration,
@@ -644,9 +726,12 @@ export class PropertyFieldVisualsComponent extends Component {
         width
       });
     }
+    for (const sourceView of getShownSourceViews(ownerDocument)) {
+      this.renderSourceView(sourceView, state);
+    }
   }
 
-  private renderContainer(container: HTMLElement, active: ActiveDomField | null, width: number, height: number): void {
+  private renderContainer(container: HTMLElement, active: ActiveDomField | null, width: number, height: number, mode: ViewMode): void {
     const existingOverlay = container.querySelector(':scope > .np-property-tree-overlay');
     for (const element of container.querySelectorAll<HTMLElement>('.np-property-field-active')) {
       element.classList.remove('np-property-field-active');
@@ -663,8 +748,8 @@ export class PropertyFieldVisualsComponent extends Component {
       }
     }
     const settings = this.pluginSettingsComponent.settings;
-    const showStatic = settings.isNestedPropertiesMainUiStaticTreeIndentationGuidesEnabled;
-    const showThreads = active !== null && this.isMainThreadingEnabled();
+    const showStatic = this.isMainStaticGuidesEnabled(mode);
+    const showThreads = active !== null && this.isMainThreadingEnabled(mode);
     if (nodes.length === 0 || (!showStatic && !showThreads)) {
       existingOverlay?.remove();
       return;
@@ -714,14 +799,76 @@ export class PropertyFieldVisualsComponent extends Component {
     commitOverlay();
   }
 
+  private renderSourceView(sourceView: HTMLElement, state: DocumentState): void {
+    const existingOverlay = sourceView.querySelector(':scope > .np-property-source-overlay');
+    const showStatic = this.isMainStaticGuidesEnabled('source');
+    const showThreads = state.active?.kind === 'source' && this.isMainThreadingEnabled('source');
+    if (!showStatic && !showThreads) {
+      existingOverlay?.remove();
+      sourceView.classList.remove('np-property-source-overlay-host');
+      return;
+    }
+    const view = this.findMarkdownView(sourceView.ownerDocument, sourceView);
+    if (view === null) {
+      existingOverlay?.remove();
+      sourceView.classList.remove('np-property-source-overlay-host');
+      return;
+    }
+    const source = view.editor.getValue();
+    const roots = parseSourcePropertyFields(source);
+    const nodes = flattenPropertyFieldForest(roots);
+    const metrics = createSourceNodeMetrics(sourceView, view, source, nodes);
+    if (metrics.size === 0) {
+      existingOverlay?.remove();
+      sourceView.classList.remove('np-property-source-overlay-host');
+      return;
+    }
+
+    sourceView.classList.add('np-property-source-overlay-host');
+    const svg = sourceView.ownerDocument.createElementNS(SVG_NAMESPACE, 'svg');
+    svg.classList.add('np-property-source-overlay');
+    svg.setAttribute('aria-hidden', 'true');
+    const width = sourceView.clientWidth;
+    const height = sourceView.clientHeight;
+    svg.setAttribute('width', String(width));
+    svg.setAttribute('height', String(height));
+    svg.setAttribute('viewBox', `0 0 ${String(width)} ${String(height)}`);
+    const readNumber = createCssNumberReader(sourceView);
+    if (showStatic) {
+      this.drawForest(svg, roots, metrics, 'np-property-guide-static', readNumber);
+    }
+    const active = showThreads && state.active?.kind === 'source' && state.active.view === view
+      ? findSourcePropertyNodeAtLine(roots, state.active.line)
+      : null;
+    if (active !== null) {
+      const settings = this.pluginSettingsComponent.settings;
+      const activeRoot = getPropertyFieldRoot(active);
+      if (settings.isAllBranchesOfActiveRootLevelPropertyFieldTreeThreadingEnabled && settings.isAllBranchesOfActiveRootLevelPropertyFieldTreeThreadingInMainUiEnabled && settings.isActiveRootLevelPropertyFieldTreeThreadingEnabled) {
+        this.drawForest(svg, roots, metrics, 'np-property-thread-root-all', readNumber);
+      } else if (settings.isAllBranchesOfActivePropertyFieldTreeThreadingEnabled && settings.isAllBranchesOfActivePropertyFieldTreeThreadingInMainUiEnabled) {
+        this.drawForest(svg, [activeRoot], metrics, 'np-property-thread-all', readNumber);
+      }
+      if (settings.isActiveRootLevelPropertyFieldTreeThreadingEnabled && settings.isActiveRootLevelPropertyFieldThreadingEnabled && settings.isActiveRootLevelPropertyFieldThreadingInMainUiEnabled) {
+        this.drawRootPath(svg, roots, activeRoot, metrics, readNumber);
+      }
+      if (settings.isActivePropertyFieldThreadingEnabled && settings.isActivePropertyFieldThreadingInMainUiEnabled) {
+        this.drawActivePath(svg, active, metrics, readNumber);
+      }
+    }
+    if (existingOverlay === null) {
+      sourceView.append(svg);
+    } else {
+      existingOverlay.replaceWith(svg);
+    }
+  }
+
   private drawForest<T extends { children: T[]; depth: number }>(svg: SVGSVGElement, roots: T[], metrics: Map<T, Point>, className: string, readNumber: CssNumberReader): void {
     const visit = (siblings: T[]): void => {
       const visibleSiblings = siblings.filter((sibling) => metrics.has(sibling));
-      if (visibleSiblings.length === 0) {
-        return;
+      if (visibleSiblings.length > 0) {
+        this.drawSiblingGroup(svg, visibleSiblings, metrics, className, readNumber);
       }
-      this.drawSiblingGroup(svg, visibleSiblings, metrics, className, readNumber);
-      for (const sibling of visibleSiblings) {
+      for (const sibling of siblings) {
         visit(sibling.children);
       }
     };
@@ -751,7 +898,7 @@ export class PropertyFieldVisualsComponent extends Component {
     }
   }
 
-  private drawActivePath(svg: SVGSVGElement, activeNode: PropertyFieldNode, metrics: Map<PropertyFieldNode, Point>, readNumber: CssNumberReader): void {
+  private drawActivePath<T extends { depth: number; parent: null | T }>(svg: SVGSVGElement, activeNode: T, metrics: Map<T, Point>, readNumber: CssNumberReader): void {
     const ancestors = getPropertyFieldAncestors(activeNode);
     const connectorLength = readNumber('--np-thread-connector-length', 28);
     const fieldGap = readNumber('--np-thread-field-gap', 4);
@@ -772,7 +919,7 @@ export class PropertyFieldVisualsComponent extends Component {
     }
   }
 
-  private drawRootPath(svg: SVGSVGElement, roots: PropertyFieldNode[], activeRoot: PropertyFieldNode, metrics: Map<PropertyFieldNode, Point>, readNumber: CssNumberReader): void {
+  private drawRootPath<T extends { depth: number }>(svg: SVGSVGElement, roots: T[], activeRoot: T, metrics: Map<T, Point>, readNumber: CssNumberReader): void {
     const rawActivePoint = metrics.get(activeRoot);
     const rawFirstPoint = roots[0] === undefined ? undefined : metrics.get(roots[0]);
     if (rawActivePoint === undefined || rawFirstPoint === undefined) {
@@ -817,7 +964,7 @@ export class PropertyFieldVisualsComponent extends Component {
         element.classList.remove('np-property-field-popover-highlight');
       }
       node.keyElement.classList.add('np-property-field-popover-highlight');
-      if (!settings.isActiveCursorPropertyFieldThreadingEnabled && this.isMainThreadingEnabled()) {
+      if (!settings.isActiveCursorPropertyFieldThreadingEnabled && this.isMainThreadingEnabled(detectViewMode(node.element))) {
         const state = this.documentStates.get(ownerDocument);
         const container = node.element.closest<HTMLElement>('.metadata-container');
         if (state !== undefined && container !== null) {
@@ -841,7 +988,7 @@ export class PropertyFieldVisualsComponent extends Component {
       view.editor.setCursor({ ch: node.column, line: node.line });
       view.editor.focus();
     }, (node) => {
-      if (!settings.isActiveCursorPropertyFieldThreadingEnabled && settings.isPropertyFieldThreadingEnabled) {
+      if (!settings.isActiveCursorPropertyFieldThreadingEnabled && this.isMainThreadingEnabled('source')) {
         const state = this.documentStates.get(ownerDocument);
         if (state !== undefined) {
           state.active = { kind: 'source', line: node.line, roots, view };
@@ -924,8 +1071,9 @@ export class PropertyFieldVisualsComponent extends Component {
         continue;
       }
       const depth = entry.node.depth;
+      const guideInset = Math.max(readNumber('--np-guide-field-gap', 4), readNumber('--np-thread-field-gap', 4)) + 4;
       metrics.set(entry.node, {
-        x: readNumber('--np-breadcrumb-indent', 18) * depth + readNumber('--np-breadcrumb-connector-length', 12) + 4,
+        x: readNumber('--np-breadcrumb-indent', 18) * depth + readNumber('--np-breadcrumb-connector-length', 12) + guideInset,
         y: row.offsetTop + row.offsetHeight / 2
       });
     }
@@ -1041,9 +1189,22 @@ export class PropertyFieldVisualsComponent extends Component {
     return resolveBreadcrumbActivationScope(settings.isFullWidthPropertyFieldHoverActivationEnabled, settings.isFullWidthPropertyKeyHoverActivationEnabled);
   }
 
-  private isMainThreadingEnabled(): boolean {
+  private isMainStaticGuidesEnabled(mode: ViewMode): boolean {
     const settings = this.pluginSettingsComponent.settings;
-    return settings.isPropertyFieldThreadingEnabled && settings.isPropertyFieldThreadingInMainUiEnabled;
+    return settings.isNestedPropertiesMainUiStaticTreeIndentationGuidesEnabled && (mode === 'live-preview'
+      ? settings.isNestedPropertiesMainUiStaticTreeIndentationGuidesInLivePreviewEnabled
+      : mode === 'source'
+      ? settings.isNestedPropertiesMainUiStaticTreeIndentationGuidesInSourceModeEnabled
+      : settings.isNestedPropertiesMainUiStaticTreeIndentationGuidesInReadingModeEnabled);
+  }
+
+  private isMainThreadingEnabled(mode: ViewMode): boolean {
+    const settings = this.pluginSettingsComponent.settings;
+    return settings.isPropertyFieldThreadingEnabled && settings.isPropertyFieldThreadingInMainUiEnabled && (mode === 'live-preview'
+      ? settings.isPropertyFieldThreadingInLivePreviewEnabled
+      : mode === 'source'
+      ? settings.isPropertyFieldThreadingInSourceModeEnabled
+      : settings.isPropertyFieldThreadingInReadingModeEnabled);
   }
 
   private resolveSourceTarget(lineElement: HTMLElement, clientX: number, clientY: number): null | { node: SourcePropertyFieldNode; roots: SourcePropertyFieldNode[]; view: MarkdownView } {
@@ -1123,11 +1284,60 @@ export function isRedoShortcut(event: Pick<KeyboardEvent, 'altKey' | 'ctrlKey' |
   return event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey && event.key.toLowerCase() === 'y';
 }
 
+export function shouldUsePropertyRedoFallback(activeElement: Element | null): boolean {
+  if (activeElement === null) {
+    return true;
+  }
+  if (activeElement.matches('input, textarea')) {
+    return false;
+  }
+  const editable = activeElement.closest<HTMLElement>('[contenteditable="true"]');
+  if (editable === null) {
+    return true;
+  }
+  return editable.classList.contains('cm-content') && editable.closest('.markdown-source-view.is-live-preview') !== null;
+}
+
 export function applyRedoFallback(editor: RedoCapableEditor, beforeRedo: string): boolean {
   if (editor.getValue() !== beforeRedo) {
     return false;
   }
   editor.redo();
+  return true;
+}
+
+export function computeTextReplacement(before: string, after: string): TextReplacement | null {
+  if (before === after) {
+    return null;
+  }
+  let start = 0;
+  while (start < before.length && start < after.length && before[start] === after[start]) {
+    start += 1;
+  }
+  let suffixLength = 0;
+  while (
+    suffixLength < before.length - start
+    && suffixLength < after.length - start
+    && before[before.length - suffixLength - 1] === after[after.length - suffixLength - 1]
+  ) {
+    suffixLength += 1;
+  }
+  return {
+    end: before.length - suffixLength,
+    replacement: after.slice(start, after.length - suffixLength),
+    start
+  };
+}
+
+export function applyRecordedPropertyEditRedo(editor: TextEditingEditor, edit: Pick<PropertyEditTransaction, 'after' | 'before'>): boolean {
+  if (editor.getValue() !== edit.before) {
+    return false;
+  }
+  const replacement = computeTextReplacement(edit.before, edit.after);
+  if (replacement === null) {
+    return false;
+  }
+  editor.replaceRange(replacement.replacement, editor.offsetToPos(replacement.start), editor.offsetToPos(replacement.end));
   return true;
 }
 
@@ -1170,6 +1380,33 @@ function createNodeMetrics(container: HTMLElement, nodes: PropertyFieldNode[]): 
   return metrics;
 }
 
+function createSourceNodeMetrics(sourceView: HTMLElement, view: MarkdownView, source: string, nodes: SourcePropertyFieldNode[]): Map<SourcePropertyFieldNode, Point> {
+  const sourceViewRect = sourceView.getBoundingClientRect();
+  const nodesByLine = new Map<number, SourcePropertyFieldNode[]>();
+  for (const node of nodes) {
+    const lineNodes = nodesByLine.get(node.line) ?? [];
+    lineNodes.push(node);
+    nodesByLine.set(node.line, lineNodes);
+  }
+  const metrics = new Map<SourcePropertyFieldNode, Point>();
+  for (const lineElement of sourceView.querySelectorAll<HTMLElement>('.cm-line')) {
+    const lineRect = lineElement.getBoundingClientRect();
+    if (lineRect.height <= 0 || lineRect.bottom < sourceViewRect.top || lineRect.top > sourceViewRect.bottom) {
+      continue;
+    }
+    const documentLine = resolveSourceDocumentLine(view, lineElement, source, view.editor.getCursor().line);
+    for (const node of nodesByLine.get(documentLine) ?? []) {
+      const range = createTextRange(lineElement, node.column, Math.min((lineElement.textContent ?? '').length, node.column + Math.max(1, node.key.length)));
+      const rangeRect = range?.getBoundingClientRect();
+      metrics.set(node, {
+        x: (rangeRect?.width ?? 0) > 0 ? rangeRect!.left - sourceViewRect.left : lineRect.left - sourceViewRect.left + node.column * 8,
+        y: lineRect.top - sourceViewRect.top + lineRect.height / 2
+      });
+    }
+  }
+  return metrics;
+}
+
 export function createCssNumberReader(element: Element): CssNumberReader {
   const styles = element.ownerDocument.defaultView?.getComputedStyle(element);
   const values = new Map<string, number>();
@@ -1203,6 +1440,10 @@ export function getShownMetadataContainers(ownerDocument: Document): HTMLElement
   return Array.from(ownerDocument.querySelectorAll<HTMLElement>(METADATA_CONTAINER_SELECTOR)).filter((container) => container.isShown());
 }
 
+export function getShownSourceViews(ownerDocument: Document): HTMLElement[] {
+  return Array.from(ownerDocument.querySelectorAll<HTMLElement>('.markdown-source-view:not(.is-live-preview)')).filter((view) => view.isShown());
+}
+
 export function isContainerRenderCurrent(snapshot: ContainerRenderSnapshot | undefined, generation: number, width: number, height: number, activeElement: HTMLElement | null): boolean {
   return snapshot?.generation === generation && snapshot.width === width && snapshot.height === height && snapshot.activeElement === activeElement;
 }
@@ -1231,6 +1472,21 @@ export function isPropertyFieldMutation(mutation: VisualMutation): boolean {
   return externalChanges.some(touchesMetadataContainer);
 }
 
+export function isSourceEditorMutation(mutation: VisualMutation): boolean {
+  const target = asElement(mutation.target);
+  if (target?.closest(OWNED_VISUAL_SELECTOR) !== null) {
+    return false;
+  }
+  if (target?.closest('.markdown-source-view:not(.is-live-preview) .cm-content') !== null) {
+    return true;
+  }
+  return [...mutation.addedNodes, ...mutation.removedNodes].some((node) => {
+    const element = asElement(node);
+    return element?.matches('.markdown-source-view:not(.is-live-preview), .markdown-source-view:not(.is-live-preview) .cm-line') === true
+      || element?.querySelector(':scope .markdown-source-view:not(.is-live-preview), :scope .markdown-source-view:not(.is-live-preview) .cm-line') !== null;
+  });
+}
+
 export function getPropertyFieldMutationContainers(mutation: VisualMutation): HTMLElement[] {
   const container = asElement(mutation.target)?.closest<HTMLElement>(METADATA_CONTAINER_SELECTOR) ?? null;
   return container === null ? [] : [container];
@@ -1250,6 +1506,10 @@ export function isPropertyVisualStyleMutation(mutation: VisualMutation): boolean
 
 function asElement(node: Node): Element | null {
   return node.nodeType === node.ELEMENT_NODE ? node as Element : node.parentElement;
+}
+
+function isPropertyEditorTarget(target: Element): boolean {
+  return target.matches('input, textarea, [contenteditable="true"]') || target.closest('[contenteditable="true"]') !== null;
 }
 
 function getRelevantStyleAttributePart(attributeName: 'class' | 'style', value: string): string {
@@ -1274,12 +1534,15 @@ function touchesMetadataContainer(node: Node): boolean {
 }
 
 function removeVisualArtifacts(ownerDocument: Document): void {
-  for (const element of ownerDocument.querySelectorAll('.np-property-tree-overlay, .np-property-breadcrumb-popover')) {
+  for (const element of ownerDocument.querySelectorAll('.np-property-tree-overlay, .np-property-source-overlay, .np-property-breadcrumb-popover')) {
     element.remove();
   }
   for (const element of ownerDocument.querySelectorAll<HTMLElement>('.np-property-tree-node, .np-property-field-active, .np-property-field-popover-highlight, .np-property-field-source-highlight')) {
     element.classList.remove('np-property-tree-node', 'np-property-field-active', 'np-property-field-popover-highlight', 'np-property-field-source-highlight');
     element.style.removeProperty('--np-property-depth');
+  }
+  for (const element of ownerDocument.querySelectorAll('.np-property-source-overlay-host')) {
+    element.classList.remove('np-property-source-overlay-host');
   }
 }
 
@@ -1287,6 +1550,13 @@ export function resolveDomPropertyAtPointer(target: Element, clientX: number, cl
   const container = resolveMetadataContainerAtPointer(target, clientX, clientY);
   if (container === null) {
     return null;
+  }
+  const directProperty = target.closest<HTMLElement>('.metadata-property');
+  if (directProperty !== null && directProperty.closest(METADATA_CONTAINER_SELECTOR) === container) {
+    const directRect = getDomPropertyDirectHitRect(directProperty);
+    if (directRect !== null && clientY >= directRect.top && clientY <= directRect.bottom) {
+      return directProperty;
+    }
   }
   return findPropertyFieldHitEntryAtPointer(container, clientY)?.element ?? null;
 }
@@ -1304,6 +1574,11 @@ export function resolveDomBreadcrumbPropertyAtPointer(target: Element, clientX: 
   }
   if (scope === 'toggle') {
     return target.closest<HTMLElement>('.metadata-property-icon, .nested-properties-collapse-btn')?.closest<HTMLElement>('.metadata-property') ?? null;
+  }
+  const directKey = target.closest<HTMLElement>('.metadata-property-key');
+  const directProperty = directKey?.closest<HTMLElement>('.metadata-property') ?? null;
+  if (directKey !== null && directProperty !== null && isClientPointWithinRect(directKey.getBoundingClientRect(), clientX, clientY)) {
+    return directProperty;
   }
   const container = resolveMetadataContainerAtPointer(target, clientX, clientY);
   if (container === null) {
@@ -1532,6 +1807,22 @@ function getPropertyFieldHitRect(node: PropertyFieldNode): Pick<DOMRect, 'bottom
   return { bottom, height: bottom - top, top };
 }
 
+function getDomPropertyDirectHitRect(property: HTMLElement): Pick<DOMRect, 'bottom' | 'height' | 'top'> | null {
+  const key = property.querySelector<HTMLElement>(':scope > .metadata-property-key');
+  if (key === null) {
+    return null;
+  }
+  const keyRect = key.getBoundingClientRect();
+  const value = property.querySelector<HTMLElement>(':scope > .metadata-property-value');
+  if (value?.querySelector(':scope .metadata-property') !== null) {
+    return keyRect;
+  }
+  const valueRect = value.getBoundingClientRect();
+  const top = Math.min(keyRect.top, valueRect.top);
+  const bottom = Math.max(keyRect.bottom, valueRect.bottom);
+  return { bottom, height: bottom - top, top };
+}
+
 function isClientPointWithinRect(rect: Pick<DOMRect, 'bottom' | 'left' | 'right' | 'top'>, clientX: number, clientY: number): boolean {
   return Number.isFinite(clientX) && Number.isFinite(clientY) && clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom;
 }
@@ -1584,9 +1875,18 @@ function resolveSourceDocumentLineAtPointer(view: MarkdownView, lineElement: HTM
   const codeMirror = (view.editor as typeof view.editor & {
     cm?: {
       posAtCoords(point: Point, precise?: boolean): number | null;
+      posAtDOM(node: Node, offset?: number): number;
     };
   }).cm;
   if (codeMirror !== undefined) {
+    try {
+      const offset = codeMirror.posAtDOM(lineElement, 0);
+      if (Number.isSafeInteger(offset) && offset >= 0) {
+        return view.editor.offsetToPos(offset).line;
+      }
+    } catch {
+      // CodeMirror may replace a line between the pointer event and this lookup.
+    }
     const rect = lineElement.getBoundingClientRect();
     const horizontalInset = Math.min(1, Math.max(0, rect.width / 2));
     const verticalInset = Math.min(1, Math.max(0, rect.height / 2));
@@ -1598,6 +1898,25 @@ function resolveSourceDocumentLineAtPointer(view: MarkdownView, lineElement: HTM
     }
   }
   return resolveSourceLine(lineElement, source, view.editor.getCursor().line);
+}
+
+function resolveSourceDocumentLine(view: MarkdownView, lineElement: HTMLElement, source: string, preferredLine: number): number {
+  const codeMirror = (view.editor as typeof view.editor & {
+    cm?: {
+      posAtDOM(node: Node, offset?: number): number;
+    };
+  }).cm;
+  if (codeMirror !== undefined) {
+    try {
+      const offset = codeMirror.posAtDOM(lineElement, 0);
+      if (Number.isSafeInteger(offset) && offset >= 0) {
+        return view.editor.offsetToPos(offset).line;
+      }
+    } catch {
+      // Fall back to visible-line matching if CodeMirror just replaced this DOM line.
+    }
+  }
+  return resolveSourceLine(lineElement, source, preferredLine);
 }
 
 function getSourceLineMatchScore(sourceLine: string, visibleLine: string): number {
