@@ -3,7 +3,10 @@
 ## 2.0.0
 
 - breaking: rename the plugin, manifest ID, command namespace, release assets, and installation folder to Nested Properties Advanced (`nested-properties-advanced`)
-- fix: restore Ctrl+Y after an escaped Live Preview property edit by preserving native handling first, then replaying the exact captured metadata transaction only when both native redo paths remain unchanged
+- fix: bind Source guide overlays to the current editor viewport, hide stale geometry during scroll, and rerender from the newly visible CodeMirror lines
+- fix: clear Source-owned guides, threading, highlights, breadcrumbs, and cached Live Preview geometry whenever an editor changes mode
+- fix: observe pointer movement in the capture phase so Obsidian editor internals cannot suppress full-key/full-field breadcrumb and threading activation
+- fix: preserve the completed Live Preview property transaction at Ctrl+Z, then restore Ctrl+Y after Escape by replaying it only when both native redo paths remain unchanged
 - fix: use geometric property-row hit testing so threading and hover-breadcrumb scopes cover their configured full widths
 - fix: map Source-mode hover targets through editor coordinates so root, flattened, repeated, and nested fields resolve reliably
 - fix: suppress the native ancestor-tree focus background while Highlight Active Property Field Tree is disabled

@@ -81,7 +81,7 @@ export class NestedPropertiesPluginSettingTab extends PluginSettingTab {
         this.toggle('isPropertyFieldHoverBreadcrumbStaticTreeIndentationGuidesEnabled', 'Hover Breadcrumb Static Tree Indentation Guides', 'Show continuous sibling spines and branch connectors inside the breadcrumb tree.', ['breadcrumb tree lines', 'popover guides'], isBreadcrumbOff)
       ]),
       this.group('Property Field Threading', [
-        this.toggle('isPropertyFieldThreadingEnabled', 'Enable Property Field Threading', 'Globally enable active property-tree path and branch highlighting.', ['logseq property path', 'property tree highlight', 'field threading']),
+        this.toggle('isPropertyFieldThreadingEnabled', 'Property Field Threading', 'Globally enable active property-tree path and branch highlighting.', ['logseq property path', 'property tree highlight', 'field threading']),
         this.toggle('isPropertyFieldThreadingInMainUiEnabled', 'Main UI Property Field Threading', 'Render enabled threading modes over the main Properties UI.', ['thread properties editor', 'thread main properties panel'], isThreadingOff),
         this.toggle('isPropertyFieldThreadingInLivePreviewEnabled', 'Property Field Threading in Live Preview', 'Show active property-field threading in Live Preview.', ['live preview property thread', 'wysiwyg active property path'], isMainUiThreadingOff),
         this.toggle('isPropertyFieldThreadingInSourceModeEnabled', 'Property Field Threading in Source Mode', 'Show active property-field threading alongside raw frontmatter in Source mode.', ['source yaml property thread', 'raw frontmatter active path'], isMainUiThreadingOff),

@@ -376,10 +376,15 @@ body.np-thread-override-colors-enabled {
 
 .np-property-source-overlay {
   position: absolute;
-  inset: 0;
+  inset: 0 auto auto 0;
   z-index: 2;
+  display: block;
   overflow: hidden;
   pointer-events: none;
+}
+
+.np-property-source-overlay-hidden {
+  display: none;
 }
 
 .np-property-guide {

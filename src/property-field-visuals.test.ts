@@ -8,6 +8,7 @@ import {
 
 import type { PropertyFieldNode } from './property-field-tree.ts';
 
+import { PluginSettings } from './plugin-settings.ts';
 import {
   applyRecordedPropertyEditRedo,
   applyRedoFallback,
@@ -22,11 +23,17 @@ import {
   getShownSourceViews,
   getSourceKeyCharacterRange,
   getThreadDepthColorIndex,
+  hideSourceViewOverlay,
   isContainerRenderCurrent,
   isPropertyFieldMutation,
   isPropertyVisualStyleMutation,
   isRedoShortcut,
   isSourceEditorMutation,
+  isSourceViewModeMutation,
+  isUndoShortcut,
+  PropertyFieldVisualsComponent,
+  removeMetadataContainerVisualArtifacts,
+  removeSourceViewVisualArtifacts,
   resolveBreadcrumbActivationScope,
   resolveDomBreadcrumbPropertyAtPointer,
   resolveDomPropertyAtPointer,
@@ -36,9 +43,45 @@ import {
   shouldUsePropertyRedoFallback
 } from './property-field-visuals.ts';
 
+interface TestActiveField {
+  element: HTMLElement;
+  kind: string;
+}
+
+interface TestDocumentState {
+  active: null | TestActiveField;
+  bodyStyleObserver: null;
+  cleanups: (() => void)[];
+  hideTimer: null;
+  hoveredBreadcrumbField: HTMLElement | null;
+  hoveredThreadingField: HTMLElement | null;
+  isPropertyRedoArmed: boolean;
+  lastPropertyEdit: unknown;
+  lastPropertyEditorView: unknown;
+  mutationObserver: null;
+  pendingPropertyRedo: unknown;
+  popover: HTMLElement | null;
+  propertyEditCaptureTimer: null;
+  propertyEditStart: unknown;
+  redoFallbackTimer: null;
+  renderedContainers: Set<HTMLElement>;
+  renderedSourceViews: Set<HTMLElement>;
+  renderFrame: null;
+  renderGeneration: number;
+  sourceHighlight: null;
+  sourceModeObservers: Map<HTMLElement, MutationObserver>;
+}
+
 interface TestEditorPosition {
   ch: number;
   line: number;
+}
+
+interface TestPropertyFieldVisualsComponent {
+  documentStates: Map<Document, TestDocumentState>;
+  findMarkdownView(ownerDocument: Document, target: EventTarget | null): unknown;
+  onKeyDown(ownerDocument: Document, event: KeyboardEvent): void;
+  onPointerMove(ownerDocument: Document, event: PointerEvent): void;
 }
 
 type VisualMutation = Parameters<typeof isPropertyFieldMutation>[0];
@@ -142,6 +185,136 @@ describe('property field visual render guards', () => {
     container.remove();
   });
 
+  it('should activate both a Live Preview breadcrumb and threading from a full key-width pointer event', () => {
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(window.HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: scrollIntoView });
+    const settings = new PluginSettings();
+    settings.isPropertyFieldThreadingEnabled = true;
+    const component = castTo<TestPropertyFieldVisualsComponent>(
+      new PropertyFieldVisualsComponent(castTo<ConstructorParameters<typeof PropertyFieldVisualsComponent>[0]>({
+        app: { workspace: { layoutReady: false } },
+        pluginSettingsComponent: { settings }
+      }))
+    );
+    const state: TestDocumentState = {
+      active: null,
+      bodyStyleObserver: null,
+      cleanups: [],
+      hideTimer: null,
+      hoveredBreadcrumbField: null,
+      hoveredThreadingField: null,
+      isPropertyRedoArmed: false,
+      lastPropertyEdit: null,
+      lastPropertyEditorView: null,
+      mutationObserver: null,
+      pendingPropertyRedo: null,
+      popover: null,
+      propertyEditCaptureTimer: null,
+      propertyEditStart: null,
+      redoFallbackTimer: null,
+      renderedContainers: new Set(),
+      renderedSourceViews: new Set(),
+      renderFrame: null,
+      renderGeneration: 0,
+      sourceHighlight: null,
+      sourceModeObservers: new Map()
+    };
+    component.documentStates.set(document, state);
+    const sourceView = document.body.createDiv({ cls: ['markdown-source-view', 'is-live-preview'] });
+    const container = sourceView.createDiv({ cls: 'metadata-container' });
+    const property = container.createDiv({ cls: 'metadata-property' });
+    const key = property.createDiv({ cls: 'metadata-property-key', text: 'Key' });
+    const value = property.createDiv({ cls: 'metadata-property-value', text: 'Value' });
+    vi.spyOn(key, 'getBoundingClientRect').mockReturnValue({ bottom: 40, height: 20, left: 10, right: 300, top: 20, width: 290 } as DOMRect);
+    vi.spyOn(value, 'getBoundingClientRect').mockReturnValue({ bottom: 40, height: 20, left: 300, right: 900, top: 20, width: 600 } as DOMRect);
+
+    component.onPointerMove(document, castTo<PointerEvent>({ clientX: 250, clientY: 30, target: key }));
+
+    expect(state.active).toMatchObject({ element: property, kind: 'dom' });
+    expect(state.hoveredBreadcrumbField).toBe(property);
+    expect(state.popover?.classList.contains('np-property-breadcrumb-popover')).toBe(true);
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+    state.popover?.remove();
+    sourceView.remove();
+    component.documentStates.delete(document);
+    Reflect.deleteProperty(window.HTMLElement.prototype, 'scrollIntoView');
+  });
+
+  it('should keep key-only property rows pointer-safe when Obsidian has not mounted a value yet', () => {
+    const container = document.body.createDiv({ cls: 'metadata-container' });
+    const property = container.createDiv({ cls: 'metadata-property' });
+    const key = property.createDiv({ cls: 'metadata-property-key', text: 'Key' });
+    vi.spyOn(key, 'getBoundingClientRect').mockReturnValue({ bottom: 40, height: 20, left: 10, right: 250, top: 20, width: 240 } as DOMRect);
+
+    expect(resolveDomPropertyAtPointer(key, 20, 30)).toBe(property);
+    container.remove();
+  });
+
+  it('should activate Source breadcrumb and threading for a flattened root property across its full row', () => {
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(window.HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: scrollIntoView });
+    const settings = new PluginSettings();
+    settings.isFullWidthPropertyFieldHoverActivationEnabled = true;
+    settings.isPropertyFieldThreadingEnabled = true;
+    const component = castTo<TestPropertyFieldVisualsComponent>(
+      new PropertyFieldVisualsComponent(castTo<ConstructorParameters<typeof PropertyFieldVisualsComponent>[0]>({
+        app: { workspace: { layoutReady: false } },
+        pluginSettingsComponent: { settings }
+      }))
+    );
+    const state = castTo<TestDocumentState>({
+      active: null,
+      bodyStyleObserver: null,
+      cleanups: [],
+      hideTimer: null,
+      hoveredBreadcrumbField: null,
+      hoveredThreadingField: null,
+      isPropertyRedoArmed: false,
+      lastPropertyEdit: null,
+      lastPropertyEditorView: null,
+      mutationObserver: null,
+      pendingPropertyRedo: null,
+      popover: null,
+      propertyEditCaptureTimer: null,
+      propertyEditStart: null,
+      redoFallbackTimer: null,
+      renderedContainers: new Set(),
+      renderedSourceViews: new Set(),
+      renderFrame: null,
+      renderGeneration: 0,
+      sourceHighlight: null,
+      sourceModeObservers: new Map()
+    });
+    component.documentStates.set(document, state);
+    const sourceView = document.body.createDiv({ cls: 'markdown-source-view mod-cm6' });
+    const content = sourceView.createDiv({ cls: 'cm-content' });
+    const line = content.createDiv({ cls: 'cm-line', text: 'root.child: value' });
+    vi.spyOn(sourceView, 'getBoundingClientRect').mockReturnValue({ bottom: 500, height: 500, left: 0, right: 1000, top: 0, width: 1000 } as DOMRect);
+    vi.spyOn(line, 'getBoundingClientRect').mockReturnValue({ bottom: 40, height: 20, left: 20, right: 900, top: 20, width: 880 } as DOMRect);
+    const source = '---\nroot.child: value\n---';
+    const view = {
+      containerEl: sourceView,
+      editor: {
+        getCursor: (): TestEditorPosition => ({ ch: 0, line: 1 }),
+        getValue: (): string => source
+      }
+    };
+    component.findMarkdownView = (): unknown => view;
+
+    component.onPointerMove(document, castTo<PointerEvent>({ clientX: 800, clientY: 30, target: content }));
+
+    expect(state.active).toMatchObject({ kind: 'source', line: 1 });
+    expect(state.hoveredBreadcrumbField).toBe(line);
+    expect(state.hoveredThreadingField).toBe(line);
+    expect(state.popover?.classList.contains('np-property-breadcrumb-popover')).toBe(true);
+    expect(line.classList.contains('np-property-field-source-highlight')).toBe(true);
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+    state.popover?.remove();
+    sourceView.remove();
+    component.documentStates.delete(document);
+    Reflect.deleteProperty(window.HTMLElement.prototype, 'scrollIntoView');
+  });
+
   it('should apply field, key, and icon activation scopes without changing full-row resolution', () => {
     const container = document.body.createDiv({ cls: 'metadata-container' });
     const property = container.createDiv({ cls: 'metadata-property' });
@@ -215,6 +388,38 @@ describe('property field visual render guards', () => {
     expect(isRedoShortcut({ altKey: false, ctrlKey: false, key: 'y', metaKey: true, shiftKey: false })).toBe(false);
   });
 
+  it('should recognize only the Windows Ctrl+Z undo shortcut', () => {
+    expect(isUndoShortcut({ altKey: false, ctrlKey: true, key: 'z', metaKey: false, shiftKey: false })).toBe(true);
+    expect(isUndoShortcut({ altKey: false, ctrlKey: true, key: 'Z', metaKey: false, shiftKey: false })).toBe(true);
+    expect(isUndoShortcut({ altKey: false, ctrlKey: true, key: 'z', metaKey: false, shiftKey: true })).toBe(false);
+    expect(isUndoShortcut({ altKey: false, ctrlKey: false, key: 'z', metaKey: true, shiftKey: false })).toBe(false);
+  });
+
+  it('should hide and fully remove Source-owned visuals without removing Live Preview tree overlays', () => {
+    const sourceView = document.body.createDiv({ cls: ['markdown-source-view', 'np-property-source-overlay-host'] });
+    const sourceOverlay = sourceView.createSvg('svg', { cls: 'np-property-source-overlay' });
+    const sourceLine = sourceView.createDiv({ cls: 'np-property-field-source-highlight' });
+    const metadata = sourceView.createDiv({ cls: 'metadata-container' });
+    const metadataOverlay = metadata.createSvg('svg', { cls: 'np-property-tree-overlay' });
+
+    hideSourceViewOverlay(sourceView);
+    expect(sourceOverlay.classList.contains('np-property-source-overlay-hidden')).toBe(true);
+    removeSourceViewVisualArtifacts(sourceView);
+    expect(sourceOverlay.isConnected).toBe(false);
+    expect(sourceLine.classList.contains('np-property-field-source-highlight')).toBe(false);
+    expect(sourceView.classList.contains('np-property-source-overlay-host')).toBe(false);
+    expect(metadataOverlay.isConnected).toBe(true);
+
+    const node = metadata.createDiv({ cls: ['metadata-property', 'np-property-tree-node', 'np-property-field-active'] });
+    node.setCssProps({ '--np-property-depth': '2' });
+    removeMetadataContainerVisualArtifacts(metadata);
+    expect(metadataOverlay.isConnected).toBe(false);
+    expect(node.classList.contains('np-property-tree-node')).toBe(false);
+    expect(node.classList.contains('np-property-field-active')).toBe(false);
+    expect(node.style.getPropertyValue('--np-property-depth')).toBe('');
+    sourceView.remove();
+  });
+
   it('should preserve native editing history except after leaving a Live Preview property editor', () => {
     const input = document.body.createEl('input');
     const sourceView = document.body.createDiv({ cls: 'markdown-source-view' });
@@ -262,6 +467,70 @@ describe('property field visual render guards', () => {
     expect(replaceRange).toHaveBeenCalledTimes(1);
     expect(applyRecordedPropertyEditRedo(editor, { after: 'different', before: 'unrelated' })).toBe(false);
     expect(computeTextReplacement(value, value)).toBeNull();
+  });
+
+  it('should freeze the Live Preview property transaction at Ctrl+Z and replay it after an empty Ctrl+Y', () => {
+    vi.useFakeTimers();
+    const settings = new PluginSettings();
+    const component = castTo<TestPropertyFieldVisualsComponent>(
+      new PropertyFieldVisualsComponent(castTo<ConstructorParameters<typeof PropertyFieldVisualsComponent>[0]>({
+        app: { workspace: { layoutReady: false } },
+        pluginSettingsComponent: { settings }
+      }))
+    );
+    const before = '---\nroot: before\n---';
+    const after = '---\nroot: after\n---';
+    let value = after;
+    const containerEl = document.body.createDiv();
+    const replaceRange = vi.fn((replacement: string, from: TestEditorPosition, to: TestEditorPosition): void => {
+      value = value.slice(0, from.ch) + replacement + value.slice(to.ch);
+    });
+    const view = {
+      containerEl,
+      editor: {
+        getValue: (): string => value,
+        offsetToPos: (offset: number): TestEditorPosition => ({ ch: offset, line: 0 }),
+        redo: vi.fn(),
+        replaceRange
+      }
+    };
+    const state = castTo<TestDocumentState>({
+      active: null,
+      bodyStyleObserver: null,
+      cleanups: [],
+      hideTimer: null,
+      hoveredBreadcrumbField: null,
+      hoveredThreadingField: null,
+      isPropertyRedoArmed: true,
+      lastPropertyEdit: null,
+      lastPropertyEditorView: view,
+      mutationObserver: null,
+      pendingPropertyRedo: null,
+      popover: null,
+      propertyEditCaptureTimer: null,
+      propertyEditStart: { before, view },
+      redoFallbackTimer: null,
+      renderedContainers: new Set(),
+      renderedSourceViews: new Set(),
+      renderFrame: null,
+      renderGeneration: 0,
+      sourceHighlight: null,
+      sourceModeObservers: new Map()
+    });
+    component.documentStates.set(document, state);
+
+    component.onKeyDown(document, castTo<KeyboardEvent>({ altKey: false, ctrlKey: true, key: 'z', metaKey: false, repeat: false, shiftKey: false }));
+    value = before;
+    component.onKeyDown(document, castTo<KeyboardEvent>({ altKey: false, ctrlKey: true, key: 'y', metaKey: false, repeat: false, shiftKey: false }));
+    vi.runAllTimers();
+
+    expect(view.editor.redo).toHaveBeenCalledTimes(1);
+    expect(replaceRange).toHaveBeenCalledTimes(1);
+    expect(value).toBe(after);
+    expect(state.pendingPropertyRedo).toBeNull();
+    component.documentStates.delete(document);
+    containerEl.remove();
+    vi.useRealTimers();
   });
 
   it('should disambiguate duplicate Source-mode keys from surrounding visible YAML lines', () => {
@@ -417,10 +686,23 @@ describe('property field visual mutation filters', () => {
     overlay.classList.add('np-property-source-overlay');
 
     expect(isSourceEditorMutation(createMutation(sourceContent, [sourceLine]))).toBe(true);
+    expect(isSourceEditorMutation(createMutation(document.body, [liveView]))).toBe(true);
     expect(isSourceEditorMutation(createMutation(liveContent, [liveLine]))).toBe(false);
     expect(isSourceEditorMutation(createMutation(overlay, [overlay.createSvg('path')]))).toBe(false);
     sourceView.remove();
     liveView.remove();
+  });
+
+  it('should invalidate only actual Source and Live Preview mode transitions', () => {
+    const sourceView = document.body.createDiv({ cls: 'markdown-source-view mod-cm6' });
+    const modeChange = createAttributeMutation(sourceView, 'class', 'markdown-source-view mod-cm6 is-live-preview');
+    expect(isSourceViewModeMutation(modeChange)).toBe(true);
+
+    const oldValue = sourceView.className;
+    sourceView.classList.add('np-property-source-overlay-host');
+    expect(isSourceViewModeMutation(createAttributeMutation(sourceView, 'class', oldValue))).toBe(false);
+    expect(isSourceViewModeMutation(createAttributeMutation(document.body, 'class', 'theme-dark'))).toBe(false);
+    sourceView.remove();
   });
 
   it('should redraw only for plugin-owned body classes and style variables', () => {
