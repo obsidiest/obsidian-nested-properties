@@ -35,6 +35,7 @@ import {
   removeMetadataContainerVisualArtifacts,
   removeSourceViewVisualArtifacts,
   resolveBreadcrumbActivationScope,
+  resolveCodeMirrorDocumentLine,
   resolveDomBreadcrumbPropertyAtPointer,
   resolveDomPropertyAtPointer,
   resolveSourceBreadcrumbLineAtPointer,
@@ -48,6 +49,10 @@ interface TestActiveField {
   kind: string;
 }
 
+interface TestDocumentLine {
+  number: number;
+}
+
 interface TestDocumentState {
   active: null | TestActiveField;
   bodyStyleObserver: null;
@@ -58,6 +63,7 @@ interface TestDocumentState {
   isPropertyRedoArmed: boolean;
   lastPropertyEdit: unknown;
   lastPropertyEditorView: unknown;
+  metadataContainerCleanups: Map<HTMLElement, () => void>;
   mutationObserver: null;
   pendingPropertyRedo: unknown;
   popover: HTMLElement | null;
@@ -78,10 +84,12 @@ interface TestEditorPosition {
 }
 
 interface TestPropertyFieldVisualsComponent {
+  codeMirrorViews: Set<unknown>;
   documentStates: Map<Document, TestDocumentState>;
   findMarkdownView(ownerDocument: Document, target: EventTarget | null): unknown;
   onKeyDown(ownerDocument: Document, event: KeyboardEvent): void;
   onPointerMove(ownerDocument: Document, event: PointerEvent): void;
+  syncMetadataContainerListeners(ownerDocument: Document, state: TestDocumentState, containers: readonly HTMLElement[]): void;
 }
 
 type VisualMutation = Parameters<typeof isPropertyFieldMutation>[0];
@@ -185,10 +193,11 @@ describe('property field visual render guards', () => {
     container.remove();
   });
 
-  it('should activate both a Live Preview breadcrumb and threading from a full key-width pointer event', () => {
+  it('should activate both a Live Preview breadcrumb and threading from a direct full-row pointer listener', () => {
     const scrollIntoView = vi.fn();
     Object.defineProperty(window.HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: scrollIntoView });
     const settings = new PluginSettings();
+    settings.isFullWidthPropertyFieldHoverActivationEnabled = true;
     settings.isPropertyFieldThreadingEnabled = true;
     const component = castTo<TestPropertyFieldVisualsComponent>(
       new PropertyFieldVisualsComponent(castTo<ConstructorParameters<typeof PropertyFieldVisualsComponent>[0]>({
@@ -206,6 +215,7 @@ describe('property field visual render guards', () => {
       isPropertyRedoArmed: false,
       lastPropertyEdit: null,
       lastPropertyEditorView: null,
+      metadataContainerCleanups: new Map(),
       mutationObserver: null,
       pendingPropertyRedo: null,
       popover: null,
@@ -228,13 +238,17 @@ describe('property field visual render guards', () => {
     vi.spyOn(key, 'getBoundingClientRect').mockReturnValue({ bottom: 40, height: 20, left: 10, right: 300, top: 20, width: 290 } as DOMRect);
     vi.spyOn(value, 'getBoundingClientRect').mockReturnValue({ bottom: 40, height: 20, left: 300, right: 900, top: 20, width: 600 } as DOMRect);
 
-    component.onPointerMove(document, castTo<PointerEvent>({ clientX: 250, clientY: 30, target: key }));
+    component.syncMetadataContainerListeners(document, state, [container]);
+    container.dispatchEvent(new MouseEvent('pointerover', { bubbles: true, clientX: 800, clientY: 30 }));
 
     expect(state.active).toMatchObject({ element: property, kind: 'dom' });
     expect(state.hoveredBreadcrumbField).toBe(property);
     expect(state.popover?.classList.contains('np-property-breadcrumb-popover')).toBe(true);
     expect(scrollIntoView).toHaveBeenCalledTimes(1);
     state.popover?.remove();
+    for (const cleanup of state.metadataContainerCleanups.values()) {
+      cleanup();
+    }
     sourceView.remove();
     component.documentStates.delete(document);
     Reflect.deleteProperty(window.HTMLElement.prototype, 'scrollIntoView');
@@ -272,6 +286,7 @@ describe('property field visual render guards', () => {
       isPropertyRedoArmed: false,
       lastPropertyEdit: null,
       lastPropertyEditorView: null,
+      metadataContainerCleanups: new Map(),
       mutationObserver: null,
       pendingPropertyRedo: null,
       popover: null,
@@ -300,6 +315,18 @@ describe('property field visual render guards', () => {
       }
     };
     component.findMarkdownView = (): unknown => view;
+    const codeMirrorView = {
+      contentDOM: content,
+      dom: content,
+      posAtDOM: (): number => source.indexOf('root.child'),
+      state: {
+        doc: {
+          lineAt: (): TestDocumentLine => ({ number: 2 }),
+          toString: (): string => source
+        }
+      }
+    };
+    component.codeMirrorViews.add(codeMirrorView);
 
     component.onPointerMove(document, castTo<PointerEvent>({ clientX: 800, clientY: 30, target: content }));
 
@@ -311,6 +338,7 @@ describe('property field visual render guards', () => {
     expect(scrollIntoView).toHaveBeenCalledTimes(1);
     state.popover?.remove();
     sourceView.remove();
+    component.codeMirrorViews.clear();
     component.documentStates.delete(document);
     Reflect.deleteProperty(window.HTMLElement.prototype, 'scrollIntoView');
   });
@@ -323,6 +351,7 @@ describe('property field visual render guards', () => {
     const collapse = key.createDiv({ cls: 'nested-properties-collapse-btn' });
     const value = property.createDiv({ cls: 'metadata-property-value' });
     vi.spyOn(key, 'getBoundingClientRect').mockReturnValue({ bottom: 40, height: 20, left: 10, right: 250, top: 20, width: 240 } as DOMRect);
+    vi.spyOn(icon, 'getBoundingClientRect').mockReturnValue({ bottom: 40, height: 20, left: 10, right: 30, top: 20, width: 20 } as DOMRect);
     vi.spyOn(value, 'getBoundingClientRect').mockReturnValue({ bottom: 40, height: 20, left: 250, right: 900, top: 20, width: 650 } as DOMRect);
 
     expect(resolveDomBreadcrumbPropertyAtPointer(value, 800, 30, 'field')).toBe(property);
@@ -330,6 +359,7 @@ describe('property field visual render guards', () => {
     expect(resolveDomBreadcrumbPropertyAtPointer(key, 300, 30, 'key')).toBeNull();
     expect(resolveDomBreadcrumbPropertyAtPointer(icon, 20, 30, 'toggle')).toBe(property);
     expect(resolveDomBreadcrumbPropertyAtPointer(collapse, 20, 30, 'toggle')).toBe(property);
+    expect(resolveDomBreadcrumbPropertyAtPointer(container, 20, 30, 'toggle')).toBe(property);
     expect(resolveDomBreadcrumbPropertyAtPointer(key, 20, 30, 'toggle')).toBeNull();
     expect(resolveDomPropertyAtPointer(value, 800, 30)).toBe(property);
     container.remove();
@@ -481,7 +511,10 @@ describe('property field visual render guards', () => {
     const before = '---\nroot: before\n---';
     const after = '---\nroot: after\n---';
     let value = after;
-    const containerEl = document.body.createDiv();
+    const containerEl = document.body.createDiv({ cls: ['markdown-source-view', 'is-live-preview'] });
+    const metadataContainer = containerEl.createDiv({ cls: 'metadata-container' });
+    const propertyInput = metadataContainer.createEl('input');
+    propertyInput.focus();
     const replaceRange = vi.fn((replacement: string, from: TestEditorPosition, to: TestEditorPosition): void => {
       value = value.slice(0, from.ch) + replacement + value.slice(to.ch);
     });
@@ -501,9 +534,10 @@ describe('property field visual render guards', () => {
       hideTimer: null,
       hoveredBreadcrumbField: null,
       hoveredThreadingField: null,
-      isPropertyRedoArmed: true,
+      isPropertyRedoArmed: false,
       lastPropertyEdit: null,
       lastPropertyEditorView: view,
+      metadataContainerCleanups: new Map(),
       mutationObserver: null,
       pendingPropertyRedo: null,
       popover: null,
@@ -519,7 +553,9 @@ describe('property field visual render guards', () => {
     });
     component.documentStates.set(document, state);
 
-    component.onKeyDown(document, castTo<KeyboardEvent>({ altKey: false, ctrlKey: true, key: 'z', metaKey: false, repeat: false, shiftKey: false }));
+    component.onKeyDown(document, castTo<KeyboardEvent>({ altKey: false, ctrlKey: false, key: 'Escape', metaKey: false, repeat: false, shiftKey: false, target: propertyInput }));
+    expect(state.isPropertyRedoArmed).toBe(true);
+    component.onKeyDown(document, castTo<KeyboardEvent>({ altKey: false, ctrlKey: true, key: 'z', metaKey: false, repeat: false, shiftKey: false, target: propertyInput }));
     value = before;
     component.onKeyDown(document, castTo<KeyboardEvent>({ altKey: false, ctrlKey: true, key: 'y', metaKey: false, repeat: false, shiftKey: false }));
     vi.runAllTimers();
@@ -531,6 +567,33 @@ describe('property field visual render guards', () => {
     component.documentStates.delete(document);
     containerEl.remove();
     vi.useRealTimers();
+  });
+
+  it('should map a virtualized Source line through CodeMirror rather than matching its text', () => {
+    const line = document.body.createDiv({ cls: 'cm-line', text: 'duplicate: value' });
+    const posAtDOM = vi.fn(() => 41);
+    const lineAt = vi.fn(() => ({ number: 9 }));
+
+    expect(resolveCodeMirrorDocumentLine(
+      castTo<Parameters<typeof resolveCodeMirrorDocumentLine>[0]>({
+        posAtDOM,
+        state: { doc: { lineAt } }
+      }),
+      line
+    )).toBe(8);
+    expect(posAtDOM).toHaveBeenCalledWith(line, 0);
+    expect(lineAt).toHaveBeenCalledWith(41);
+    posAtDOM.mockImplementation(() => {
+      throw new Error('virtualized');
+    });
+    expect(resolveCodeMirrorDocumentLine(
+      castTo<Parameters<typeof resolveCodeMirrorDocumentLine>[0]>({
+        posAtDOM,
+        state: { doc: { lineAt } }
+      }),
+      line
+    )).toBeNull();
+    line.remove();
   });
 
   it('should disambiguate duplicate Source-mode keys from surrounding visible YAML lines', () => {

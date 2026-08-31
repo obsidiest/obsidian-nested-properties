@@ -42,6 +42,7 @@ export class Plugin extends PluginBase {
         pluginSettingsComponent
       })
     );
+    this.registerEditorExtension(propertyFieldVisualsComponent.createEditorExtension());
     this.addSettingTab(
       new NestedPropertiesPluginSettingTab({
         app: this.app,

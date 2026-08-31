@@ -1,7 +1,13 @@
 /* v8 ignore file -- Integration behavior depends on Obsidian's live metadata-editor and CodeMirror DOM. */
 /* eslint-disable @typescript-eslint/array-type, @typescript-eslint/no-confusing-void-expression, @typescript-eslint/no-non-null-assertion, @typescript-eslint/no-unnecessary-condition, @typescript-eslint/restrict-template-expressions, complexity, import-x/consistent-type-specifier-style, no-magic-numbers, no-restricted-syntax, obsidian-dev-utils/params-options-name-match, obsidian-dev-utils/readonly-params-options-result-members, perfectionist/sort-classes, perfectionist/sort-modules, perfectionist/sort-union-types, unicorn/consistent-boolean-name, unicorn/no-array-callback-reference, unicorn/no-nested-ternary, unicorn/no-unnecessary-nested-ternary, unicorn/prefer-spread -- The component mirrors and traverses Obsidian's cross-window DOM; local callback and ordering rules would obscure the event-flow implementation. */
+import type { Extension } from '@codemirror/state';
+import type {
+  EditorView,
+  ViewUpdate
+} from '@codemirror/view';
 import type { App } from 'obsidian';
 
+import { ViewPlugin } from '@codemirror/view';
 import {
   Component,
   MarkdownView
@@ -64,6 +70,7 @@ interface DocumentState {
   isPropertyRedoArmed: boolean;
   lastPropertyEdit: PropertyEditTransaction | null;
   lastPropertyEditorView: MarkdownView | null;
+  metadataContainerCleanups: Map<HTMLElement, () => void>;
   mutationObserver: MutationObserver | null;
   pendingPropertyRedo: PropertyEditTransaction | null;
   popover: HTMLElement | null;
@@ -123,8 +130,6 @@ interface Point {
 interface PropertyFieldHitEntry {
   bottom: number;
   element: HTMLElement;
-  keyLeft: number;
-  keyRight: number;
   top: number;
 }
 
@@ -146,6 +151,7 @@ interface VisualMutation {
 
 export class PropertyFieldVisualsComponent extends Component {
   private readonly app: App;
+  private readonly codeMirrorViews = new Set<EditorView>();
   private readonly containerRenderSnapshots = new WeakMap<HTMLElement, ContainerRenderSnapshot>();
   private readonly documentStates = new Map<Document, DocumentState>();
   private readonly pluginSettingsComponent: PluginSettingsComponent;
@@ -186,6 +192,47 @@ export class PropertyFieldVisualsComponent extends Component {
     });
   }
 
+  /**
+   * Bind Source-mode rendering to CodeMirror itself. Source lines are virtualized, so document-wide
+   * DOM observation cannot reliably associate a visible `.cm-line` with its document position or
+   * know when CodeMirror has replaced the viewport after a scroll.
+   */
+  public createEditorExtension(): Extension {
+    return ViewPlugin.define((view) => {
+      const pointerMoveListener = (event: PointerEvent): void => this.onCodeMirrorPointerMove(view, event);
+      const pointerLeaveListener = (): void => this.onCodeMirrorPointerLeave(view);
+      const scrollListener = (): void => this.onCodeMirrorScroll(view);
+      const viewportMutationListener = (): void => this.onCodeMirrorViewportMutation(view);
+      const ownerWindow = view.dom.ownerDocument.defaultView;
+      const MutationObserverConstructor = ownerWindow?.MutationObserver;
+      const contentObserver = MutationObserverConstructor === undefined ? null : new MutationObserverConstructor(viewportMutationListener);
+      contentObserver?.observe(view.contentDOM, { attributeFilter: ['class'], attributes: true, childList: true, subtree: true });
+      const ResizeObserverConstructor = ownerWindow?.ResizeObserver;
+      const resizeObserver = ResizeObserverConstructor === undefined ? null : new ResizeObserverConstructor(viewportMutationListener);
+      resizeObserver?.observe(view.dom);
+      resizeObserver?.observe(view.contentDOM);
+      const sourceView = getCodeMirrorSourceView(view);
+      if (sourceView !== null) {
+        resizeObserver?.observe(sourceView);
+      }
+      view.dom.addEventListener('pointermove', pointerMoveListener, { capture: true, passive: true });
+      view.dom.addEventListener('pointerleave', pointerLeaveListener, { passive: true });
+      view.scrollDOM.addEventListener('scroll', scrollListener, { passive: true });
+      this.registerCodeMirrorView(view);
+      return {
+        destroy: (): void => {
+          contentObserver?.disconnect();
+          resizeObserver?.disconnect();
+          view.dom.removeEventListener('pointermove', pointerMoveListener, { capture: true });
+          view.dom.removeEventListener('pointerleave', pointerLeaveListener);
+          view.scrollDOM.removeEventListener('scroll', scrollListener);
+          this.unregisterCodeMirrorView(view);
+        },
+        update: (update: ViewUpdate): void => this.onCodeMirrorUpdate(update)
+      };
+    });
+  }
+
   public override onunload(): void {
     for (const [ownerDocument, state] of this.documentStates) {
       state.mutationObserver?.disconnect();
@@ -194,6 +241,9 @@ export class PropertyFieldVisualsComponent extends Component {
         observer.disconnect();
       }
       for (const cleanup of state.cleanups) {
+        cleanup();
+      }
+      for (const cleanup of state.metadataContainerCleanups.values()) {
         cleanup();
       }
       if (state.renderFrame !== null) {
@@ -209,6 +259,7 @@ export class PropertyFieldVisualsComponent extends Component {
       state.sourceHighlight?.classList.remove('np-property-field-source-highlight');
       removeVisualArtifacts(ownerDocument);
     }
+    this.codeMirrorViews.clear();
     this.documentStates.clear();
     super.onunload();
   }
@@ -259,6 +310,7 @@ export class PropertyFieldVisualsComponent extends Component {
       isPropertyRedoArmed: false,
       lastPropertyEdit: null,
       lastPropertyEditorView: null,
+      metadataContainerCleanups: new Map(),
       mutationObserver: null,
       pendingPropertyRedo: null,
       popover: null,
@@ -275,14 +327,6 @@ export class PropertyFieldVisualsComponent extends Component {
     this.documentStates.set(ownerDocument, state);
     this.applyBodyClasses(ownerDocument);
 
-    const pointerMoveListener = (event: PointerEvent): void => this.onPointerMove(ownerDocument, event);
-    const pointerOutListener = (event: PointerEvent): void => this.onPointerOut(ownerDocument, event);
-    ownerDocument.addEventListener('pointermove', pointerMoveListener, { capture: true, passive: true });
-    ownerDocument.addEventListener('pointerout', pointerOutListener, { capture: true, passive: true });
-    state.cleanups.push(() => {
-      ownerDocument.removeEventListener('pointermove', pointerMoveListener, { capture: true });
-      ownerDocument.removeEventListener('pointerout', pointerOutListener, { capture: true });
-    });
     this.listen(ownerDocument, state, 'focusin', (event) => this.onFocusIn(ownerDocument, event));
     this.listen(ownerDocument, state, 'focusout', (event) => this.onFocusOut(ownerDocument, event));
     this.listen(ownerDocument, state, 'input', (event) => this.onPropertyEditorChanged(ownerDocument, event));
@@ -330,14 +374,11 @@ export class PropertyFieldVisualsComponent extends Component {
     const Observer = ownerDocument.defaultView?.MutationObserver;
     if (Observer !== undefined) {
       state.mutationObserver = new Observer((mutations) => {
-        // CodeMirror continuously replaces unrelated Live Preview nodes. Only metadata-editor
-        // Structure changes can invalidate an overlay's measured property geometry.
+        // CodeMirror viewport changes are handled by the registered ViewPlugin. Restrict this
+        // Document observer to metadata editors so virtualized Source DOM churn is never scanned again.
         let shouldRender = false;
         for (const mutation of mutations) {
           if (!isPropertyFieldMutation(mutation)) {
-            if (isSourceEditorMutation(mutation)) {
-              shouldRender = true;
-            }
             continue;
           }
           shouldRender = true;
@@ -378,6 +419,121 @@ export class PropertyFieldVisualsComponent extends Component {
     this.containerRenderSnapshots.delete(container);
     propertyFieldHitSnapshots.delete(container);
     this.scheduleRender(container.ownerDocument);
+  }
+
+  private registerCodeMirrorView(view: EditorView): void {
+    this.codeMirrorViews.add(view);
+    this.observeDocument(view.dom.ownerDocument);
+    this.scheduleRender(view.dom.ownerDocument);
+  }
+
+  private unregisterCodeMirrorView(view: EditorView): void {
+    this.codeMirrorViews.delete(view);
+    const sourceView = getCodeMirrorSourceView(view);
+    if (sourceView !== null && [...this.codeMirrorViews].every((candidate) => getCodeMirrorSourceView(candidate) !== sourceView)) {
+      removeSourceViewVisualArtifacts(sourceView);
+    }
+    this.scheduleRender(view.dom.ownerDocument);
+  }
+
+  private onCodeMirrorUpdate(update: ViewUpdate): void {
+    if (
+      !update.docChanged
+      && !update.focusChanged
+      && !update.geometryChanged
+      && !update.selectionSet
+      && !update.viewportChanged
+      && update.transactions.every((transaction) => !transaction.reconfigured)
+    ) {
+      return;
+    }
+    const sourceView = getCodeMirrorSourceView(update.view);
+    if (sourceView !== null && (update.docChanged || update.geometryChanged || update.viewportChanged)) {
+      hideSourceViewOverlay(sourceView);
+    }
+    this.scheduleRender(update.view.dom.ownerDocument);
+  }
+
+  private onCodeMirrorViewportMutation(view: EditorView): void {
+    const sourceView = getCodeMirrorSourceView(view);
+    if (sourceView !== null) {
+      hideSourceViewOverlay(sourceView);
+    }
+    this.scheduleRender(view.dom.ownerDocument);
+  }
+
+  private onCodeMirrorScroll(view: EditorView): void {
+    const sourceView = getCodeMirrorSourceView(view);
+    const state = this.documentStates.get(view.dom.ownerDocument);
+    if (sourceView !== null) {
+      hideSourceViewOverlay(sourceView);
+      if (state !== undefined) {
+        this.clearSourcePointerActivation(view.dom.ownerDocument, state, sourceView);
+      }
+    }
+    this.scheduleRender(view.dom.ownerDocument);
+  }
+
+  private onCodeMirrorPointerMove(view: EditorView, event: PointerEvent): void {
+    const target = event.target;
+    if (
+      getCodeMirrorSourceView(view)?.classList.contains('is-live-preview') === true
+      && target instanceof view.dom.ownerDocument.defaultView!.Element
+      && target.closest(METADATA_CONTAINER_SELECTOR) !== null
+    ) {
+      return;
+    }
+    this.onPointerMove(view.dom.ownerDocument, event);
+  }
+
+  private onCodeMirrorPointerLeave(view: EditorView): void {
+    this.clearPointerActivation(view.dom.ownerDocument);
+  }
+
+  private findCodeMirrorView(element: Element): EditorView | null {
+    const sourceView = element.matches('.markdown-source-view') ? element : element.closest('.markdown-source-view');
+    for (const view of this.codeMirrorViews) {
+      const candidateSourceView = getCodeMirrorSourceView(view);
+      if (
+        candidateSourceView !== null
+        && (candidateSourceView === sourceView || element.contains(candidateSourceView) || candidateSourceView.contains(element))
+      ) {
+        return view;
+      }
+    }
+    return null;
+  }
+
+  private syncMetadataContainerListeners(ownerDocument: Document, state: DocumentState, containers: readonly HTMLElement[]): void {
+    const currentContainers = new Set(containers);
+    for (const [container, cleanup] of state.metadataContainerCleanups) {
+      if (container.isConnected && currentContainers.has(container)) {
+        continue;
+      }
+      cleanup();
+      state.metadataContainerCleanups.delete(container);
+    }
+    for (const container of containers) {
+      if (state.metadataContainerCleanups.has(container)) {
+        continue;
+      }
+      const activate = (event: PointerEvent): void => this.onPointerMove(ownerDocument, event);
+      const leave = (): void => this.clearPointerActivation(ownerDocument);
+      container.addEventListener('pointermove', activate, { capture: true, passive: true });
+      container.addEventListener('pointerover', activate, { capture: true, passive: true });
+      container.addEventListener('pointerleave', leave, { passive: true });
+      const ResizeObserverConstructor = ownerDocument.defaultView?.ResizeObserver;
+      const resizeObserver = ResizeObserverConstructor === undefined
+        ? null
+        : new ResizeObserverConstructor(() => this.invalidateContainer(container));
+      resizeObserver?.observe(container);
+      state.metadataContainerCleanups.set(container, () => {
+        container.removeEventListener('pointermove', activate, { capture: true });
+        container.removeEventListener('pointerover', activate, { capture: true });
+        container.removeEventListener('pointerleave', leave);
+        resizeObserver?.disconnect();
+      });
+    }
   }
 
   private listen<K extends keyof DocumentEventMap>(ownerDocument: Document, state: DocumentState, type: K, listener: (event: DocumentEventMap[K]) => void): void {
@@ -439,20 +595,12 @@ export class PropertyFieldVisualsComponent extends Component {
       }
       return;
     }
-    const sourceTarget = this.resolveSourceTarget(sourceLine, event.clientX, event.clientY);
+    const sourceTarget = this.resolveSourceTarget(sourceLine);
     if (sourceTarget === null) {
       this.clearPointerActivation(ownerDocument);
       return;
     }
     this.updateSourcePointerActivation(ownerDocument, state, sourceTarget, breadcrumbLine, threadingLine);
-  }
-
-  private onPointerOut(ownerDocument: Document, event: PointerEvent): void {
-    const related = event.relatedTarget;
-    if (related instanceof ownerDocument.defaultView!.Node) {
-      return;
-    }
-    this.clearPointerActivation(ownerDocument);
   }
 
   private clearPointerActivation(ownerDocument: Document): void {
@@ -653,19 +801,30 @@ export class PropertyFieldVisualsComponent extends Component {
   }
 
   private onKeyDown(ownerDocument: Document, event: KeyboardEvent): void {
+    const state = this.documentStates.get(ownerDocument);
+    const activeElement = ownerDocument.activeElement;
+    const eventElement = event.target instanceof ownerDocument.defaultView!.Element ? event.target : activeElement;
+    if (event.key === 'Escape' && eventElement instanceof ownerDocument.defaultView!.Element && eventElement.closest(METADATA_CONTAINER_SELECTOR) !== null) {
+      if (state !== undefined) {
+        state.isPropertyRedoArmed = true;
+        this.schedulePropertyEditCapture(ownerDocument, state);
+      }
+      return;
+    }
     const isRedo = isRedoShortcut(event);
     const isUndo = isUndoShortcut(event);
-    const state = this.documentStates.get(ownerDocument);
     if ((!isRedo && !isUndo) || event.repeat) {
       return;
     }
-    const activeElement = ownerDocument.activeElement;
-    if (activeElement instanceof ownerDocument.defaultView!.Element && !shouldUsePropertyRedoFallback(activeElement)) {
+    const isEscapedPropertyEditor = state?.isPropertyRedoArmed === true
+      && activeElement instanceof ownerDocument.defaultView!.Element
+      && activeElement.closest(METADATA_CONTAINER_SELECTOR) !== null;
+    if (activeElement instanceof ownerDocument.defaultView!.Element && !shouldUsePropertyRedoFallback(activeElement) && !isEscapedPropertyEditor) {
       return;
     }
     const view = state?.lastPropertyEditorView;
     const win = ownerDocument.defaultView;
-    if (state === undefined || !state.isPropertyRedoArmed || view === null || view === undefined || win === null || !view.containerEl.isConnected) {
+    if (state === undefined || view === null || view === undefined || win === null || !view.containerEl.isConnected) {
       return;
     }
     if (isUndo) {
@@ -680,6 +839,9 @@ export class PropertyFieldVisualsComponent extends Component {
     }
     const beforeRedo = view.editor.getValue();
     const redoEdit = state.pendingPropertyRedo ?? state.lastPropertyEdit;
+    if (redoEdit?.view !== view || beforeRedo !== redoEdit.before) {
+      return;
+    }
     if (state.redoFallbackTimer !== null) {
       win.clearTimeout(state.redoFallbackTimer);
     }
@@ -698,6 +860,7 @@ export class PropertyFieldVisualsComponent extends Component {
         const didReplay = view.editor.getValue() === beforeRedo && redoEdit?.view === view && applyRecordedPropertyEditRedo(view.editor, redoEdit);
         if (didReplay || (redoEdit?.view === view && view.editor.getValue() === redoEdit.after)) {
           state.pendingPropertyRedo = null;
+          state.isPropertyRedoArmed = false;
         }
       }, REDO_FALLBACK_DELAY_IN_MILLISECONDS);
     }, REDO_FALLBACK_DELAY_IN_MILLISECONDS);
@@ -800,6 +963,7 @@ export class PropertyFieldVisualsComponent extends Component {
     }
     const shownContainers = getShownMetadataContainers(ownerDocument);
     const shownSourceViews = getShownSourceViews(ownerDocument);
+    this.syncMetadataContainerListeners(ownerDocument, state, shownContainers);
     const shownContainerSet = new Set(shownContainers);
     const shownSourceViewSet = new Set(shownSourceViews);
     for (const container of state.renderedContainers) {
@@ -992,15 +1156,16 @@ export class PropertyFieldVisualsComponent extends Component {
       return;
     }
     const view = this.findMarkdownView(sourceView.ownerDocument, sourceView);
-    if (view === null) {
+    const codeMirrorView = this.findCodeMirrorView(sourceView);
+    if (view === null || codeMirrorView === null) {
       existingOverlay?.remove();
       sourceView.classList.remove('np-property-source-overlay-host');
       return;
     }
-    const source = view.editor.getValue();
+    const source = codeMirrorView.state.doc.toString();
     const roots = parseSourcePropertyFields(source);
     const nodes = flattenPropertyFieldForest(roots);
-    const metrics = createSourceNodeMetrics(sourceView, view, source, nodes);
+    const metrics = createSourceNodeMetrics(sourceView, codeMirrorView, nodes);
     if (metrics.size === 0) {
       existingOverlay?.remove();
       sourceView.classList.remove('np-property-source-overlay-host');
@@ -1023,9 +1188,6 @@ export class PropertyFieldVisualsComponent extends Component {
     svg.setAttribute('width', String(width));
     svg.setAttribute('height', String(height));
     svg.setAttribute('viewBox', `0 0 ${String(width)} ${String(height)}`);
-    if (sourceView.scrollLeft !== 0 || sourceView.scrollTop !== 0) {
-      svg.style.transform = `translate(${String(sourceView.scrollLeft)}px, ${String(sourceView.scrollTop)}px)`;
-    }
     const readNumber = createCssNumberReader(sourceView);
     if (showStatic) {
       this.drawForest(svg, roots, metrics, 'np-property-guide-static', readNumber);
@@ -1400,14 +1562,18 @@ export class PropertyFieldVisualsComponent extends Component {
       : settings.isPropertyFieldThreadingInReadingModeEnabled);
   }
 
-  private resolveSourceTarget(lineElement: HTMLElement, clientX: number, clientY: number): null | { node: SourcePropertyFieldNode; roots: SourcePropertyFieldNode[]; view: MarkdownView } {
+  private resolveSourceTarget(lineElement: HTMLElement): null | { node: SourcePropertyFieldNode; roots: SourcePropertyFieldNode[]; view: MarkdownView } {
     const view = this.findMarkdownView(lineElement.ownerDocument, lineElement);
-    if (view === null) {
+    const codeMirrorView = this.findCodeMirrorView(lineElement);
+    if (view === null || codeMirrorView === null) {
       return null;
     }
-    const source = view.editor.getValue();
+    const source = codeMirrorView.state.doc.toString();
     const roots = parseSourcePropertyFields(source);
-    const line = resolveSourceDocumentLineAtPointer(view, lineElement, clientX, clientY, source);
+    const line = resolveCodeMirrorDocumentLine(codeMirrorView, lineElement);
+    if (line === null) {
+      return null;
+    }
     const node = findSourcePropertyNodeAtLine(roots, line);
     return node === null ? null : { node, roots, view };
   }
@@ -1433,8 +1599,10 @@ export class PropertyFieldVisualsComponent extends Component {
   }
 
   private highlightVisibleSourceLine(ownerDocument: Document, view: MarkdownView, lineNumber: number): void {
-    const source = view.editor.getValue();
-    const sourceLine = Array.from(view.containerEl.querySelectorAll<HTMLElement>('.cm-line')).find((line) => resolveSourceLine(line, source, lineNumber) === lineNumber);
+    const codeMirrorView = this.findCodeMirrorView(view.containerEl);
+    const sourceLine = codeMirrorView === null
+      ? undefined
+      : Array.from(codeMirrorView.contentDOM.querySelectorAll<HTMLElement>('.cm-line')).find((line) => resolveCodeMirrorDocumentLine(codeMirrorView, line) === lineNumber);
     if (sourceLine !== undefined) {
       this.highlightSourceLine(ownerDocument, sourceLine);
     }
@@ -1581,7 +1749,7 @@ function createNodeMetrics(container: HTMLElement, nodes: PropertyFieldNode[]): 
   return metrics;
 }
 
-function createSourceNodeMetrics(sourceView: HTMLElement, view: MarkdownView, source: string, nodes: SourcePropertyFieldNode[]): Map<SourcePropertyFieldNode, Point> {
+function createSourceNodeMetrics(sourceView: HTMLElement, view: EditorView, nodes: SourcePropertyFieldNode[]): Map<SourcePropertyFieldNode, Point> {
   const sourceViewRect = sourceView.getBoundingClientRect();
   const editorViewport = sourceView.querySelector<HTMLElement>('.cm-scroller, .cm-editor')?.getBoundingClientRect() ?? sourceViewRect;
   const viewportTop = Math.max(sourceViewRect.top, editorViewport.top);
@@ -1593,12 +1761,15 @@ function createSourceNodeMetrics(sourceView: HTMLElement, view: MarkdownView, so
     nodesByLine.set(node.line, lineNodes);
   }
   const metrics = new Map<SourcePropertyFieldNode, Point>();
-  for (const lineElement of sourceView.querySelectorAll<HTMLElement>('.cm-line')) {
+  for (const lineElement of view.contentDOM.querySelectorAll<HTMLElement>('.cm-line')) {
     const lineRect = lineElement.getBoundingClientRect();
     if (lineRect.height <= 0 || lineRect.bottom < viewportTop || lineRect.top > viewportBottom) {
       continue;
     }
-    const documentLine = resolveSourceDocumentLine(view, lineElement, source, view.editor.getCursor().line);
+    const documentLine = resolveCodeMirrorDocumentLine(view, lineElement);
+    if (documentLine === null) {
+      continue;
+    }
     for (const node of nodesByLine.get(documentLine) ?? []) {
       const range = createTextRange(lineElement, node.column, Math.min((lineElement.textContent ?? '').length, node.column + Math.max(1, node.key.length)));
       const rangeRect = range?.getBoundingClientRect();
@@ -1809,12 +1980,10 @@ export function resolveDomBreadcrumbPropertyAtPointer(target: Element, clientX: 
     return resolveDomPropertyAtPointer(target, clientX, clientY);
   }
   if (scope === 'toggle') {
-    return target.closest<HTMLElement>('.metadata-property-icon, .nested-properties-collapse-btn')?.closest<HTMLElement>('.metadata-property') ?? null;
-  }
-  const directKey = target.closest<HTMLElement>('.metadata-property-key');
-  const directProperty = directKey?.closest<HTMLElement>('.metadata-property') ?? null;
-  if (directKey !== null && directProperty !== null && isClientPointWithinRect(directKey.getBoundingClientRect(), clientX, clientY)) {
-    return directProperty;
+    const directToggle = target.closest<HTMLElement>('.metadata-property-icon, .nested-properties-collapse-btn');
+    if (directToggle !== null) {
+      return directToggle.closest<HTMLElement>('.metadata-property');
+    }
   }
   const container = resolveMetadataContainerAtPointer(target, clientX, clientY);
   if (container === null) {
@@ -1824,9 +1993,17 @@ export function resolveDomBreadcrumbPropertyAtPointer(target: Element, clientX: 
   if (entry === null) {
     return null;
   }
-  const containerRect = container.getBoundingClientRect();
-  const relativeClientX = clientX - containerRect.left;
-  return relativeClientX >= entry.keyLeft && relativeClientX <= entry.keyRight ? entry.element : null;
+  if (scope === 'toggle') {
+    // A normal DOM hit inside the property must land on the actual toggle.
+    // Only use geometry when an overlay/container swallowed the child target.
+    if (entry.element.contains(target)) {
+      return null;
+    }
+    const toggles = entry.element.querySelectorAll<HTMLElement>(':scope > .metadata-property-key .metadata-property-icon, :scope > .metadata-property-key .nested-properties-collapse-btn');
+    return [...toggles].some((toggle) => isClientPointWithinRect(toggle.getBoundingClientRect(), clientX, clientY)) ? entry.element : null;
+  }
+  const key = entry.element.querySelector<HTMLElement>(':scope > .metadata-property-key');
+  return key !== null && isClientPointWithinRect(key.getBoundingClientRect(), clientX, clientY) ? entry.element : null;
 }
 
 export function resolveSourceLineElementAtPointer(target: Element, clientX: number, clientY: number): HTMLElement | null {
@@ -2013,14 +2190,11 @@ function getPropertyFieldHitSnapshot(container: HTMLElement, containerRect: Pick
   const entries = flattenVisiblePropertyFieldForest(buildPropertyFieldForest(container))
     .map((node) => {
       const rect = getPropertyFieldHitRect(node);
-      const keyRect = node.keyElement.getBoundingClientRect();
       return {
         bottom: rect.bottom - containerRect.top,
         depth: node.depth,
         element: node.element,
         height: rect.height,
-        keyLeft: keyRect.left - containerRect.left,
-        keyRight: keyRect.right - containerRect.left,
         top: rect.top - containerRect.top
       };
     })
@@ -2072,6 +2246,23 @@ export function findElementAtClientY(elements: readonly HTMLElement[], clientY: 
   return candidates[0]?.element ?? null;
 }
 
+function getCodeMirrorSourceView(view: EditorView): HTMLElement | null {
+  return view.dom.closest<HTMLElement>('.markdown-source-view.mod-cm6, .markdown-source-view');
+}
+
+export function resolveCodeMirrorDocumentLine(view: Pick<EditorView, 'posAtDOM' | 'state'>, lineElement: HTMLElement): number | null {
+  try {
+    const position = view.posAtDOM(lineElement, 0);
+    if (!Number.isSafeInteger(position) || position < 0) {
+      return null;
+    }
+    return view.state.doc.lineAt(position).number - 1;
+  } catch {
+    // CodeMirror can replace a virtualized line between an event and the animation frame.
+    return null;
+  }
+}
+
 export function resolveSourceLine(lineElement: HTMLElement, source: string, preferredLine: number): number {
   const explicitLine = Number(lineElement.dataset['line']);
   if (Number.isSafeInteger(explicitLine) && explicitLine >= 0) {
@@ -2106,54 +2297,6 @@ export function resolveSourceLine(lineElement: HTMLElement, source: string, pref
   });
   scoredCandidates.sort((left, right) => right.score - left.score || Math.abs(left.candidate - preferredLine) - Math.abs(right.candidate - preferredLine));
   return scoredCandidates[0]?.candidate ?? preferredLine;
-}
-
-function resolveSourceDocumentLineAtPointer(view: MarkdownView, lineElement: HTMLElement, clientX: number, clientY: number, source: string): number {
-  const codeMirror = (view.editor as typeof view.editor & {
-    cm?: {
-      posAtCoords(point: Point, precise?: boolean): number | null;
-      posAtDOM(node: Node, offset?: number): number;
-    };
-  }).cm;
-  if (codeMirror !== undefined) {
-    try {
-      const offset = codeMirror.posAtDOM(lineElement, 0);
-      if (Number.isSafeInteger(offset) && offset >= 0) {
-        return view.editor.offsetToPos(offset).line;
-      }
-    } catch {
-      // CodeMirror may replace a line between the pointer event and this lookup.
-    }
-    const rect = lineElement.getBoundingClientRect();
-    const horizontalInset = Math.min(1, Math.max(0, rect.width / 2));
-    const verticalInset = Math.min(1, Math.max(0, rect.height / 2));
-    const x = Math.min(Math.max(clientX, rect.left + horizontalInset), rect.right - horizontalInset);
-    const y = Math.min(Math.max(clientY, rect.top + verticalInset), rect.bottom - verticalInset);
-    const offset = codeMirror.posAtCoords({ x, y }, false);
-    if (offset !== null && Number.isSafeInteger(offset) && offset >= 0) {
-      return view.editor.offsetToPos(offset).line;
-    }
-  }
-  return resolveSourceLine(lineElement, source, view.editor.getCursor().line);
-}
-
-function resolveSourceDocumentLine(view: MarkdownView, lineElement: HTMLElement, source: string, preferredLine: number): number {
-  const codeMirror = (view.editor as typeof view.editor & {
-    cm?: {
-      posAtDOM(node: Node, offset?: number): number;
-    };
-  }).cm;
-  if (codeMirror !== undefined) {
-    try {
-      const offset = codeMirror.posAtDOM(lineElement, 0);
-      if (Number.isSafeInteger(offset) && offset >= 0) {
-        return view.editor.offsetToPos(offset).line;
-      }
-    } catch {
-      // Fall back to visible-line matching if CodeMirror just replaced this DOM line.
-    }
-  }
-  return resolveSourceLine(lineElement, source, preferredLine);
 }
 
 function getSourceLineMatchScore(sourceLine: string, visibleLine: string): number {

@@ -66,6 +66,7 @@ interface VaultOpsWithCommands {
 }
 
 interface VisualsWithRefresh {
+  createEditorExtension: ReturnType<typeof vi.fn>;
   refresh: ReturnType<typeof vi.fn>;
 }
 
@@ -98,7 +99,7 @@ async function loadableVisualsStub(): Promise<ReturnType<typeof vi.fn>> {
   // eslint-disable-next-line prefer-arrow-callback -- A non-arrow function so it is constructable via `new`.
   return vi.fn(function propertyFieldVisualsStub() {
     const component = new Component();
-    Object.assign(component, { refresh: vi.fn() });
+    Object.assign(component, { createEditorExtension: vi.fn(() => []), refresh: vi.fn() });
     return component;
   });
 }
@@ -213,6 +214,16 @@ describe('Plugin', () => {
       await plugin.onload();
 
       expect(addChildSpy).toHaveBeenCalledWith(instanceOf(MockNestedPropertyRendererComponent));
+    });
+
+    it('should register the property visuals CodeMirror extension', async () => {
+      const plugin = new Plugin(app, manifest);
+      const registerEditorExtensionSpy = vi.spyOn(plugin, 'registerEditorExtension');
+      await plugin.onload();
+
+      const visuals = castTo<VisualsWithRefresh>(instanceOf(MockPropertyFieldVisualsComponent));
+      expect(visuals.createEditorExtension).toHaveBeenCalledTimes(1);
+      expect(registerEditorExtensionSpy).toHaveBeenCalledWith([]);
     });
 
     it('should register the toggle-full-key-display command', async () => {

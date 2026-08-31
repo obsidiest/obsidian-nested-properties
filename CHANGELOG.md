@@ -3,6 +3,9 @@
 ## 2.0.0
 
 - breaking: rename the plugin, manifest ID, command namespace, release assets, and installation folder to Nested Properties Advanced (`nested-properties-advanced`)
+- fix: register a CodeMirror view plugin for exact virtualized-line mapping, viewport updates, and `scrollDOM` repaint scheduling instead of cursor-nearest Source-line inference
+- fix: attach row-based pointer listeners directly to every rendered metadata container so full-field, full-key, and icon activation do not depend on Obsidian's bubbled event target
+- fix: arm the Live Preview property transaction when Escape is pressed even when Obsidian retains focus in its property input, allowing Ctrl+Y to replay the exact Ctrl+Z edit
 - fix: bind Source guide overlays to the current editor viewport, hide stale geometry during scroll, and rerender from the newly visible CodeMirror lines
 - fix: clear Source-owned guides, threading, highlights, breadcrumbs, and cached Live Preview geometry whenever an editor changes mode
 - fix: observe pointer movement in the capture phase so Obsidian editor internals cannot suppress full-key/full-field breadcrumb and threading activation
