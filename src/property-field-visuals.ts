@@ -67,6 +67,7 @@ interface DocumentState {
   hideTimer: number | null;
   hoveredBreadcrumbField: HTMLElement | null;
   hoveredThreadingField: HTMLElement | null;
+  isApplyingPropertyHistory: boolean;
   isPropertyRedoArmed: boolean;
   lastPropertyEdit: PropertyEditTransaction | null;
   lastPropertyEditorView: MarkdownView | null;
@@ -205,18 +206,6 @@ export class PropertyFieldVisualsComponent extends Component {
       const viewportMutationListener = (): void => this.onCodeMirrorViewportMutation(view);
       const ownerWindow = view.dom.ownerDocument.defaultView;
       const sourceView = getCodeMirrorSourceView(view);
-      let pointerSurface = sourceView ?? view.dom;
-      function bindPointerSurface(): void {
-        const nextPointerSurface = getCodeMirrorSourceView(view) ?? view.dom;
-        if (nextPointerSurface === pointerSurface) {
-          return;
-        }
-        pointerSurface.removeEventListener('pointermove', pointerMoveListener, { capture: true });
-        pointerSurface.removeEventListener('pointerleave', pointerLeaveListener);
-        pointerSurface = nextPointerSurface;
-        pointerSurface.addEventListener('pointermove', pointerMoveListener, { capture: true, passive: true });
-        pointerSurface.addEventListener('pointerleave', pointerLeaveListener, { passive: true });
-      }
       const MutationObserverConstructor = ownerWindow?.MutationObserver;
       const contentObserver = MutationObserverConstructor === undefined ? null : new MutationObserverConstructor(viewportMutationListener);
       contentObserver?.observe(view.contentDOM, { attributeFilter: ['class'], attributes: true, childList: true, subtree: true });
@@ -227,24 +216,23 @@ export class PropertyFieldVisualsComponent extends Component {
       if (sourceView !== null) {
         resizeObserver?.observe(sourceView);
       }
-      // Obsidian can mount the Live Preview Properties editor beside CodeMirror's inner `.cm-editor`.
-      // Some desktop layouts therefore need the common source view as their pointer surface.
-      // The source view contains both the metadata rows and the full horizontal editor viewport.
-      pointerSurface.addEventListener('pointermove', pointerMoveListener, { capture: true, passive: true });
-      pointerSurface.addEventListener('pointerleave', pointerLeaveListener, { passive: true });
+      // Keep each CodeMirror listener confined to its own editor. Live Preview metadata editors
+      // are observed directly below, so a shared source-view listener cannot let a second
+      // EditorView clear or replace the first view's pointer activation.
+      view.dom.addEventListener('pointermove', pointerMoveListener, { capture: true, passive: true });
+      view.dom.addEventListener('pointerleave', pointerLeaveListener, { passive: true });
       view.scrollDOM.addEventListener('scroll', scrollListener, { passive: true });
       this.registerCodeMirrorView(view);
       return {
         destroy: (): void => {
           contentObserver?.disconnect();
           resizeObserver?.disconnect();
-          pointerSurface.removeEventListener('pointermove', pointerMoveListener, { capture: true });
-          pointerSurface.removeEventListener('pointerleave', pointerLeaveListener);
+          view.dom.removeEventListener('pointermove', pointerMoveListener, { capture: true });
+          view.dom.removeEventListener('pointerleave', pointerLeaveListener);
           view.scrollDOM.removeEventListener('scroll', scrollListener);
           this.unregisterCodeMirrorView(view);
         },
         update: (update: ViewUpdate): void => {
-          bindPointerSurface();
           this.onCodeMirrorUpdate(update);
         }
       };
@@ -325,6 +313,7 @@ export class PropertyFieldVisualsComponent extends Component {
       hideTimer: null,
       hoveredBreadcrumbField: null,
       hoveredThreadingField: null,
+      isApplyingPropertyHistory: false,
       isPropertyRedoArmed: false,
       lastPropertyEdit: null,
       lastPropertyEditorView: null,
@@ -515,10 +504,10 @@ export class PropertyFieldVisualsComponent extends Component {
   }
 
   private syncMetadataContainerListeners(ownerDocument: Document, state: DocumentState, containers: readonly HTMLElement[]): void {
-    // CodeMirror's source-view listener owns Live Preview.
-    // Per-container listeners remain necessary for Reading mode, where there is no EditorView extension.
-    const directlyObservedContainers = containers.filter((container) => container.closest('.markdown-source-view.is-live-preview') === null);
-    const currentContainers = new Set(directlyObservedContainers);
+    // Bind every metadata editor directly. In Live Preview Obsidian can mount the Properties
+    // editor outside CodeMirror's `.cm-editor`; relying on a shared ancestor made blank key/value
+    // width stop producing pointer events and also left breadcrumbs active after their scope ended.
+    const currentContainers = new Set(containers);
     for (const [container, cleanup] of state.metadataContainerCleanups) {
       if (container.isConnected && currentContainers.has(container)) {
         continue;
@@ -526,7 +515,7 @@ export class PropertyFieldVisualsComponent extends Component {
       cleanup();
       state.metadataContainerCleanups.delete(container);
     }
-    for (const container of directlyObservedContainers) {
+    for (const container of containers) {
       if (state.metadataContainerCleanups.has(container)) {
         continue;
       }
@@ -800,10 +789,15 @@ export class PropertyFieldVisualsComponent extends Component {
       const view = this.findMarkdownView(ownerDocument, metadataContainer);
       state.lastPropertyEditorView = view;
       if (view !== null && isPropertyEditorTarget(target)) {
-        state.propertyEditStart = { before: view.editor.getValue(), view };
-        state.isPropertyRedoArmed = false;
-        state.lastPropertyEdit = null;
-        state.pendingPropertyRedo = null;
+        const currentValue = view.editor.getValue();
+        const isPendingRedoFocus = state.isApplyingPropertyHistory
+          || (state.pendingPropertyRedo?.view === view && currentValue === state.pendingPropertyRedo.before);
+        state.propertyEditStart = { before: currentValue, view };
+        if (!isPendingRedoFocus) {
+          state.isPropertyRedoArmed = false;
+          state.lastPropertyEdit = null;
+          state.pendingPropertyRedo = null;
+        }
       }
     }
     if (!this.pluginSettingsComponent.settings.isActiveCursorPropertyFieldThreadingEnabled || propertyElement === null || !this.isMainThreadingEnabled(detectViewMode(propertyElement))) {
@@ -830,6 +824,17 @@ export class PropertyFieldVisualsComponent extends Component {
     if ((!isRedo && !isUndo) || event.repeat) {
       return;
     }
+
+    // Source mode keeps Obsidian's native history transaction, but not its incidental
+    // selection-driven jump to the bottom of Frontmatter.
+    const activeView = this.findMarkdownView(ownerDocument, eventElement) ?? state?.lastPropertyEditorView ?? null;
+    const activeCodeMirrorView = activeView === null ? null : this.findCodeMirrorView(activeView.containerEl);
+    const activeSourceView = activeCodeMirrorView === null ? null : getCodeMirrorSourceView(activeCodeMirrorView);
+    if (activeCodeMirrorView !== null && activeSourceView !== null && !activeSourceView.classList.contains('is-live-preview')) {
+      this.preserveCodeMirrorScroll(activeCodeMirrorView);
+      return;
+    }
+
     if (state?.isPropertyRedoArmed !== true) {
       return;
     }
@@ -841,17 +846,39 @@ export class PropertyFieldVisualsComponent extends Component {
     if (isUndo) {
       const capturedEdit = state.lastPropertyEdit === null ? capturePropertyEditTransaction(state.propertyEditStart, currentValue) : null;
       const edit = state.lastPropertyEdit?.view === view && currentValue === state.lastPropertyEdit.after ? state.lastPropertyEdit : capturedEdit;
-      if (edit?.view !== view || currentValue !== edit.after || !this.applyPropertyEditTransaction(edit, 'undo')) {
+      if (edit?.view !== view || currentValue !== edit.after) {
+        return;
+      }
+      const previousPendingRedo = state.pendingPropertyRedo;
+      state.lastPropertyEdit = edit;
+      state.pendingPropertyRedo = edit;
+      state.isApplyingPropertyHistory = true;
+      let wasApplied = false;
+      try {
+        wasApplied = this.applyPropertyEditTransaction(edit, 'undo');
+      } finally {
+        state.isApplyingPropertyHistory = false;
+      }
+      if (!wasApplied) {
+        state.pendingPropertyRedo = previousPendingRedo;
         return;
       }
       event.preventDefault();
       event.stopImmediatePropagation();
-      state.lastPropertyEdit = edit;
-      state.pendingPropertyRedo = edit;
       return;
     }
     const redoEdit = state.pendingPropertyRedo ?? state.lastPropertyEdit;
-    if (redoEdit?.view !== view || currentValue !== redoEdit.before || !this.applyPropertyEditTransaction(redoEdit, 'redo')) {
+    if (redoEdit?.view !== view || currentValue !== redoEdit.before) {
+      return;
+    }
+    state.isApplyingPropertyHistory = true;
+    let wasApplied = false;
+    try {
+      wasApplied = this.applyPropertyEditTransaction(redoEdit, 'redo');
+    } finally {
+      state.isApplyingPropertyHistory = false;
+    }
+    if (!wasApplied) {
       return;
     }
     event.preventDefault();
@@ -877,6 +904,7 @@ export class PropertyFieldVisualsComponent extends Component {
     // Obsidian's native Properties history bridge scrolls the editor selection to the end of
     // Frontmatter and loses Ctrl+Y after Escape. Apply the exact captured change to the associated
     // EditorView without creating another history item or requesting a selection scroll.
+    this.preserveCodeMirrorScroll(codeMirrorView);
     codeMirrorView.dispatch({
       annotations: Transaction.addToHistory.of(false),
       changes: {
@@ -886,6 +914,25 @@ export class PropertyFieldVisualsComponent extends Component {
       }
     });
     return codeMirrorView.state.doc.toString() === after;
+  }
+
+  private preserveCodeMirrorScroll(view: EditorView): void {
+    const scrollTop = view.scrollDOM.scrollTop;
+    const scrollLeft = view.scrollDOM.scrollLeft;
+    const restore = (): void => {
+      view.scrollDOM.scrollTop = scrollTop;
+      view.scrollDOM.scrollLeft = scrollLeft;
+    };
+    const win = view.dom.ownerDocument.defaultView;
+    if (win === null) {
+      return;
+    }
+    win.setTimeout(restore, 0);
+    win.setTimeout(restore, 50);
+    win.requestAnimationFrame(() => {
+      restore();
+      win.requestAnimationFrame(restore);
+    });
   }
 
   private onFocusOut(ownerDocument: Document, event: FocusEvent): void {
@@ -1421,7 +1468,10 @@ export class PropertyFieldVisualsComponent extends Component {
     this.positionPopover(popover, anchor.getBoundingClientRect());
     this.drawBreadcrumbGuides(tree, entries, rowElements);
     const currentIndex = entries.findIndex((entry) => entry.current);
-    rowElements[currentIndex]?.scrollIntoView({ block: 'nearest' });
+    const currentRow = rowElements[currentIndex];
+    if (currentRow !== undefined) {
+      scrollElementWithinContainer(tree, currentRow);
+    }
     popover.addEventListener('pointerenter', () => this.cancelPopoverHide(ownerDocument));
     popover.addEventListener('pointerleave', () => this.schedulePopoverHide(ownerDocument));
   }
@@ -1644,6 +1694,16 @@ export function buildRoundedPath(params: { endX: number; endY: number; radius: n
   const horizontalDirection = endX >= startX ? 1 : -1;
   const verticalDirection = endY >= startY ? 1 : -1;
   return `M ${startX} ${startY} V ${endY - verticalDirection * radius} Q ${startX} ${endY} ${startX + horizontalDirection * radius} ${endY} H ${endX}`;
+}
+
+export function scrollElementWithinContainer(container: HTMLElement, element: HTMLElement): void {
+  const containerRect = container.getBoundingClientRect();
+  const elementRect = element.getBoundingClientRect();
+  if (elementRect.top < containerRect.top) {
+    container.scrollTop -= containerRect.top - elementRect.top;
+  } else if (elementRect.bottom > containerRect.bottom) {
+    container.scrollTop += elementRect.bottom - containerRect.bottom;
+  }
 }
 
 export function getBreadcrumbKeyboardTarget(key: string, activeIndex: number, length: number): number | null {

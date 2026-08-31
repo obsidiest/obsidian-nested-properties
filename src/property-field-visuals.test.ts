@@ -42,6 +42,7 @@ import {
   resolveSourceBreadcrumbLineAtPointer,
   resolveSourceLine,
   resolveSourceLineElementAtPointer,
+  scrollElementWithinContainer,
   shouldUsePropertyRedoFallback
 } from './property-field-visuals.ts';
 
@@ -71,6 +72,7 @@ interface TestDocumentState {
   hideTimer: null;
   hoveredBreadcrumbField: HTMLElement | null;
   hoveredThreadingField: HTMLElement | null;
+  isApplyingPropertyHistory: boolean;
   isPropertyRedoArmed: boolean;
   lastPropertyEdit: unknown;
   lastPropertyEditorView: unknown;
@@ -98,8 +100,10 @@ interface TestPropertyFieldVisualsComponent {
   codeMirrorViews: Set<unknown>;
   documentStates: Map<Document, TestDocumentState>;
   findMarkdownView(ownerDocument: Document, target: EventTarget | null): unknown;
+  onFocusIn(ownerDocument: Document, event: FocusEvent): void;
   onKeyDown(ownerDocument: Document, event: KeyboardEvent): void;
   onPointerMove(ownerDocument: Document, event: PointerEvent, codeMirrorView?: unknown): void;
+  syncMetadataContainerListeners(ownerDocument: Document, state: TestDocumentState, containers: readonly HTMLElement[]): void;
 }
 
 type VisualMutation = Parameters<typeof isPropertyFieldMutation>[0];
@@ -136,6 +140,21 @@ describe('buildRoundedPath', () => {
   it('should use a straight connector for a zero radius or level endpoints', () => {
     expect(buildRoundedPath({ endX: 40, endY: 30, radius: 0, startX: 10, startY: 0 })).toBe('M 10 0 V 30 H 40');
     expect(buildRoundedPath({ endX: 40, endY: 30, radius: 6, startX: 10, startY: 30 })).toBe('M 10 30 V 30 H 40');
+  });
+});
+
+describe('scrollElementWithinContainer', () => {
+  it('should scroll only the breadcrumb tree and never an ancestor editor', () => {
+    const tree = document.body.createDiv();
+    const row = tree.createDiv();
+    tree.scrollTop = 40;
+    vi.spyOn(tree, 'getBoundingClientRect').mockReturnValue({ bottom: 200, top: 100 } as DOMRect);
+    vi.spyOn(row, 'getBoundingClientRect').mockReturnValue({ bottom: 260, top: 220 } as DOMRect);
+
+    scrollElementWithinContainer(tree, row);
+
+    expect(tree.scrollTop).toBe(100);
+    tree.remove();
   });
 });
 
@@ -223,6 +242,7 @@ describe('property field visual render guards', () => {
       hideTimer: null,
       hoveredBreadcrumbField: null,
       hoveredThreadingField: null,
+      isApplyingPropertyHistory: false,
       isPropertyRedoArmed: false,
       lastPropertyEdit: null,
       lastPropertyEditorView: null,
@@ -252,12 +272,14 @@ describe('property field visual render guards', () => {
     vi.spyOn(key, 'getBoundingClientRect').mockReturnValue({ bottom: 40, height: 20, left: 10, right: 300, top: 20, width: 290 } as DOMRect);
     vi.spyOn(value, 'getBoundingClientRect').mockReturnValue({ bottom: 40, height: 20, left: 300, right: 900, top: 20, width: 600 } as DOMRect);
 
+    component.syncMetadataContainerListeners(document, state, [container]);
+    expect(state.metadataContainerCleanups.has(container)).toBe(true);
     component.onPointerMove(document, castTo<PointerEvent>({ clientX: 1600, clientY: 30, target: sourceView }));
 
     expect(state.active).toMatchObject({ element: property, kind: 'dom' });
     expect(state.hoveredBreadcrumbField).toBe(property);
     expect(state.popover?.classList.contains('np-property-breadcrumb-popover')).toBe(true);
-    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+    expect(scrollIntoView).not.toHaveBeenCalled();
     state.popover?.remove();
     sourceView.remove();
     component.documentStates.delete(document);
@@ -293,6 +315,7 @@ describe('property field visual render guards', () => {
       hideTimer: null,
       hoveredBreadcrumbField: null,
       hoveredThreadingField: null,
+      isApplyingPropertyHistory: false,
       isPropertyRedoArmed: false,
       lastPropertyEdit: null,
       lastPropertyEditorView: null,
@@ -353,7 +376,7 @@ describe('property field visual render guards', () => {
     expect(state.hoveredBreadcrumbField).toBe(flattenedLine);
     expect(state.hoveredThreadingField).toBe(flattenedLine);
     expect(flattenedLine.classList.contains('np-property-field-source-highlight')).toBe(true);
-    expect(scrollIntoView).toHaveBeenCalledTimes(2);
+    expect(scrollIntoView).not.toHaveBeenCalled();
     state.popover?.remove();
     sourceView.remove();
     component.codeMirrorViews.clear();
@@ -403,6 +426,7 @@ describe('property field visual render guards', () => {
       hideTimer: null,
       hoveredBreadcrumbField: null,
       hoveredThreadingField: null,
+      isApplyingPropertyHistory: false,
       isPropertyRedoArmed: false,
       lastPropertyEdit: null,
       lastPropertyEditorView: null,
@@ -619,7 +643,8 @@ describe('property field visual render guards', () => {
     let value = after;
     const containerEl = document.body.createDiv({ cls: ['markdown-source-view', 'is-live-preview'] });
     const metadataContainer = containerEl.createDiv({ cls: 'metadata-container' });
-    const propertyInput = metadataContainer.createEl('input');
+    const property = metadataContainer.createDiv({ cls: 'metadata-property' });
+    const propertyInput = property.createEl('input');
     propertyInput.focus();
     const replaceRange = vi.fn((replacement: string, from: TestEditorPosition, to: TestEditorPosition): void => {
       value = value.slice(0, from.ch) + replacement + value.slice(to.ch);
@@ -637,10 +662,14 @@ describe('property field visual render guards', () => {
       const { from, insert, to } = transaction.changes;
       value = value.slice(0, from) + insert + value.slice(to);
     });
+    const scrollDOM = containerEl.createDiv();
+    scrollDOM.scrollTop = 96;
+    scrollDOM.scrollLeft = 7;
     const codeMirrorView = {
       contentDOM: containerEl,
       dispatch,
       dom: containerEl,
+      scrollDOM,
       state: {
         doc: {
           toString: (): string => value
@@ -654,6 +683,7 @@ describe('property field visual render guards', () => {
       hideTimer: null,
       hoveredBreadcrumbField: null,
       hoveredThreadingField: null,
+      isApplyingPropertyHistory: false,
       isPropertyRedoArmed: false,
       lastPropertyEdit: null,
       lastPropertyEditorView: view,
@@ -673,6 +703,7 @@ describe('property field visual render guards', () => {
     });
     component.documentStates.set(document, state);
     component.codeMirrorViews.add(codeMirrorView);
+    component.findMarkdownView = (): unknown => view;
 
     component.onKeyDown(document, castTo<KeyboardEvent>({ altKey: false, ctrlKey: false, key: 'Escape', metaKey: false, repeat: false, shiftKey: false, target: propertyInput }));
     expect(state.isPropertyRedoArmed).toBe(true);
@@ -695,6 +726,9 @@ describe('property field visual render guards', () => {
     expect(value).toBe(before);
     expect(undoPreventDefault).toHaveBeenCalledTimes(1);
     expect(undoStopImmediatePropagation).toHaveBeenCalledTimes(1);
+    component.onFocusIn(document, castTo<FocusEvent>({ target: propertyInput }));
+    expect(state.isPropertyRedoArmed).toBe(true);
+    expect(state.pendingPropertyRedo).not.toBeNull();
     const redoPreventDefault = vi.fn();
     const redoStopImmediatePropagation = vi.fn();
     component.onKeyDown(
@@ -738,6 +772,11 @@ describe('property field visual render guards', () => {
       })
     );
     expect(sourcePreventDefault).not.toHaveBeenCalled();
+    scrollDOM.scrollTop = 999;
+    scrollDOM.scrollLeft = 999;
+    vi.runAllTimers();
+    expect(scrollDOM.scrollTop).toBe(96);
+    expect(scrollDOM.scrollLeft).toBe(7);
     expect(dispatch).toHaveBeenCalledTimes(2);
     expect(value).toBe(after);
 

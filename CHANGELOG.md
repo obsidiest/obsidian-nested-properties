@@ -2,6 +2,9 @@
 
 ## 2.0.0
 
+- fix: bind Live Preview metadata hit testing directly to every Properties editor and isolate Source hit testing to its owning CodeMirror view so full-row threading and exact breadcrumb scopes activate and deactivate reliably
+- fix: keep captured Live Preview property redo state through the metadata rerender after Ctrl+Z, preserve editor scroll in both editing modes, and confine breadcrumb scrolling to the popover itself
+
 - fix: bind property hover hit testing to the complete Markdown source-view and select Live Preview metadata rows solely by vertical position across the editor viewport
 - fix: keep key-only and icon-only hover breadcrumbs scoped to their exact targets while preserving the interactive popover handoff delay
 - fix: resolve Source root and flattened property rows through the EditorView that delivered the pointer event, excluding stale virtualized lines from other tabs or editor views
