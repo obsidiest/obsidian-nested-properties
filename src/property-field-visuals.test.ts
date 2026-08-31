@@ -36,6 +36,7 @@ import {
   removeSourceViewVisualArtifacts,
   resolveBreadcrumbActivationScope,
   resolveCodeMirrorDocumentLine,
+  resolveCodeMirrorLineElementAtPointer,
   resolveDomBreadcrumbPropertyAtPointer,
   resolveDomPropertyAtPointer,
   resolveSourceBreadcrumbLineAtPointer,
@@ -47,6 +48,16 @@ import {
 interface TestActiveField {
   element: HTMLElement;
   kind: string;
+}
+
+interface TestCodeMirrorChange {
+  changes: TestCodeMirrorChangeRange;
+}
+
+interface TestCodeMirrorChangeRange {
+  from: number;
+  insert: string;
+  to: number;
 }
 
 interface TestDocumentLine {
@@ -88,8 +99,7 @@ interface TestPropertyFieldVisualsComponent {
   documentStates: Map<Document, TestDocumentState>;
   findMarkdownView(ownerDocument: Document, target: EventTarget | null): unknown;
   onKeyDown(ownerDocument: Document, event: KeyboardEvent): void;
-  onPointerMove(ownerDocument: Document, event: PointerEvent): void;
-  syncMetadataContainerListeners(ownerDocument: Document, state: TestDocumentState, containers: readonly HTMLElement[]): void;
+  onPointerMove(ownerDocument: Document, event: PointerEvent, codeMirrorView?: unknown): void;
 }
 
 type VisualMutation = Parameters<typeof isPropertyFieldMutation>[0];
@@ -183,6 +193,7 @@ describe('property field visual render guards', () => {
     const property = container.createDiv({ cls: 'metadata-property' });
     const key = property.createDiv({ cls: 'metadata-property-key', text: 'Key' });
     const value = property.createDiv({ cls: 'metadata-property-value', text: 'Value' });
+    vi.spyOn(container, 'isShown').mockReturnValue(true);
     vi.spyOn(key, 'getBoundingClientRect').mockReturnValue({ bottom: 40, height: 20, left: 10, right: 250, top: 20, width: 240 } as DOMRect);
     vi.spyOn(value, 'getBoundingClientRect').mockReturnValue({ bottom: 40, height: 20, left: 250, right: 900, top: 20, width: 650 } as DOMRect);
 
@@ -193,7 +204,7 @@ describe('property field visual render guards', () => {
     container.remove();
   });
 
-  it('should activate both a Live Preview breadcrumb and threading from a direct full-row pointer listener', () => {
+  it('should activate both a Live Preview breadcrumb and threading across the source-view width', () => {
     const scrollIntoView = vi.fn();
     Object.defineProperty(window.HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: scrollIntoView });
     const settings = new PluginSettings();
@@ -235,20 +246,19 @@ describe('property field visual render guards', () => {
     const property = container.createDiv({ cls: 'metadata-property' });
     const key = property.createDiv({ cls: 'metadata-property-key', text: 'Key' });
     const value = property.createDiv({ cls: 'metadata-property-value', text: 'Value' });
+    vi.spyOn(container, 'isShown').mockReturnValue(true);
+    vi.spyOn(sourceView, 'getBoundingClientRect').mockReturnValue({ bottom: 500, height: 500, left: 0, right: 1800, top: 0, width: 1800 } as DOMRect);
+    vi.spyOn(container, 'getBoundingClientRect').mockReturnValue({ bottom: 100, height: 100, left: 100, right: 900, top: 0, width: 800 } as DOMRect);
     vi.spyOn(key, 'getBoundingClientRect').mockReturnValue({ bottom: 40, height: 20, left: 10, right: 300, top: 20, width: 290 } as DOMRect);
     vi.spyOn(value, 'getBoundingClientRect').mockReturnValue({ bottom: 40, height: 20, left: 300, right: 900, top: 20, width: 600 } as DOMRect);
 
-    component.syncMetadataContainerListeners(document, state, [container]);
-    container.dispatchEvent(new MouseEvent('pointerover', { bubbles: true, clientX: 800, clientY: 30 }));
+    component.onPointerMove(document, castTo<PointerEvent>({ clientX: 1600, clientY: 30, target: sourceView }));
 
     expect(state.active).toMatchObject({ element: property, kind: 'dom' });
     expect(state.hoveredBreadcrumbField).toBe(property);
     expect(state.popover?.classList.contains('np-property-breadcrumb-popover')).toBe(true);
     expect(scrollIntoView).toHaveBeenCalledTimes(1);
     state.popover?.remove();
-    for (const cleanup of state.metadataContainerCleanups.values()) {
-      cleanup();
-    }
     sourceView.remove();
     component.documentStates.delete(document);
     Reflect.deleteProperty(window.HTMLElement.prototype, 'scrollIntoView');
@@ -264,7 +274,7 @@ describe('property field visual render guards', () => {
     container.remove();
   });
 
-  it('should activate Source breadcrumb and threading for a flattened root property across its full row', () => {
+  it('should activate Source breadcrumb and threading for root and flattened properties across the source-view width', () => {
     const scrollIntoView = vi.fn();
     Object.defineProperty(window.HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: scrollIntoView });
     const settings = new PluginSettings();
@@ -303,10 +313,12 @@ describe('property field visual render guards', () => {
     component.documentStates.set(document, state);
     const sourceView = document.body.createDiv({ cls: 'markdown-source-view mod-cm6' });
     const content = sourceView.createDiv({ cls: 'cm-content' });
-    const line = content.createDiv({ cls: 'cm-line', text: 'root.child: value' });
+    const rootLine = content.createDiv({ cls: 'cm-line', text: 'root: value' });
+    const flattenedLine = content.createDiv({ cls: 'cm-line', text: 'root.child: value' });
     vi.spyOn(sourceView, 'getBoundingClientRect').mockReturnValue({ bottom: 500, height: 500, left: 0, right: 1000, top: 0, width: 1000 } as DOMRect);
-    vi.spyOn(line, 'getBoundingClientRect').mockReturnValue({ bottom: 40, height: 20, left: 20, right: 900, top: 20, width: 880 } as DOMRect);
-    const source = '---\nroot.child: value\n---';
+    vi.spyOn(rootLine, 'getBoundingClientRect').mockReturnValue({ bottom: 40, height: 20, left: 20, right: 900, top: 20, width: 880 } as DOMRect);
+    vi.spyOn(flattenedLine, 'getBoundingClientRect').mockReturnValue({ bottom: 70, height: 20, left: 20, right: 900, top: 50, width: 880 } as DOMRect);
+    const source = '---\nroot: value\nroot.child: value\n---';
     const view = {
       containerEl: sourceView,
       editor: {
@@ -318,24 +330,30 @@ describe('property field visual render guards', () => {
     const codeMirrorView = {
       contentDOM: content,
       dom: content,
-      posAtDOM: (): number => source.indexOf('root.child'),
+      posAtDOM: (lineElement: HTMLElement): number => lineElement === rootLine ? source.indexOf('root:') : source.indexOf('root.child'),
       state: {
         doc: {
-          lineAt: (): TestDocumentLine => ({ number: 2 }),
+          lineAt: (position: number): TestDocumentLine => ({ number: position === source.indexOf('root:') ? 2 : 3 }),
           toString: (): string => source
         }
       }
     };
     component.codeMirrorViews.add(codeMirrorView);
 
-    component.onPointerMove(document, castTo<PointerEvent>({ clientX: 800, clientY: 30, target: content }));
+    component.onPointerMove(document, castTo<PointerEvent>({ clientX: 980, clientY: 30, target: sourceView }), codeMirrorView);
 
     expect(state.active).toMatchObject({ kind: 'source', line: 1 });
-    expect(state.hoveredBreadcrumbField).toBe(line);
-    expect(state.hoveredThreadingField).toBe(line);
+    expect(state.hoveredBreadcrumbField).toBe(rootLine);
+    expect(state.hoveredThreadingField).toBe(rootLine);
     expect(state.popover?.classList.contains('np-property-breadcrumb-popover')).toBe(true);
-    expect(line.classList.contains('np-property-field-source-highlight')).toBe(true);
-    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+    expect(rootLine.classList.contains('np-property-field-source-highlight')).toBe(true);
+
+    component.onPointerMove(document, castTo<PointerEvent>({ clientX: 980, clientY: 60, target: sourceView }), codeMirrorView);
+    expect(state.active).toMatchObject({ kind: 'source', line: 2 });
+    expect(state.hoveredBreadcrumbField).toBe(flattenedLine);
+    expect(state.hoveredThreadingField).toBe(flattenedLine);
+    expect(flattenedLine.classList.contains('np-property-field-source-highlight')).toBe(true);
+    expect(scrollIntoView).toHaveBeenCalledTimes(2);
     state.popover?.remove();
     sourceView.remove();
     component.codeMirrorViews.clear();
@@ -360,9 +378,81 @@ describe('property field visual render guards', () => {
     expect(resolveDomBreadcrumbPropertyAtPointer(icon, 20, 30, 'toggle')).toBe(property);
     expect(resolveDomBreadcrumbPropertyAtPointer(collapse, 20, 30, 'toggle')).toBe(property);
     expect(resolveDomBreadcrumbPropertyAtPointer(container, 20, 30, 'toggle')).toBe(property);
-    expect(resolveDomBreadcrumbPropertyAtPointer(key, 20, 30, 'toggle')).toBeNull();
+    expect(resolveDomBreadcrumbPropertyAtPointer(key, 20, 30, 'toggle')).toBe(property);
+    expect(resolveDomBreadcrumbPropertyAtPointer(key, 100, 30, 'toggle')).toBeNull();
     expect(resolveDomPropertyAtPointer(value, 800, 30)).toBe(property);
     container.remove();
+  });
+
+  it('should deactivate key-only and icon-only breadcrumbs as soon as their activation target is left', () => {
+    vi.useFakeTimers();
+    Object.defineProperty(window.HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+    const settings = new PluginSettings();
+    settings.isFullWidthPropertyFieldHoverActivationEnabled = false;
+    settings.isFullWidthPropertyKeyHoverActivationEnabled = true;
+    const component = castTo<TestPropertyFieldVisualsComponent>(
+      new PropertyFieldVisualsComponent(castTo<ConstructorParameters<typeof PropertyFieldVisualsComponent>[0]>({
+        app: { workspace: { layoutReady: false } },
+        pluginSettingsComponent: { settings }
+      }))
+    );
+    const state = castTo<TestDocumentState>({
+      active: null,
+      bodyStyleObserver: null,
+      cleanups: [],
+      hideTimer: null,
+      hoveredBreadcrumbField: null,
+      hoveredThreadingField: null,
+      isPropertyRedoArmed: false,
+      lastPropertyEdit: null,
+      lastPropertyEditorView: null,
+      metadataContainerCleanups: new Map(),
+      mutationObserver: null,
+      pendingPropertyRedo: null,
+      popover: null,
+      propertyEditCaptureTimer: null,
+      propertyEditStart: null,
+      redoFallbackTimer: null,
+      renderedContainers: new Set(),
+      renderedSourceViews: new Set(),
+      renderFrame: null,
+      renderGeneration: 0,
+      sourceHighlight: null,
+      sourceModeObservers: new Map()
+    });
+    component.documentStates.set(document, state);
+    const sourceView = document.body.createDiv({ cls: ['markdown-source-view', 'is-live-preview'] });
+    const container = sourceView.createDiv({ cls: 'metadata-container' });
+    const property = container.createDiv({ cls: 'metadata-property' });
+    const key = property.createDiv({ cls: 'metadata-property-key', text: 'Key' });
+    const icon = key.createDiv({ cls: 'metadata-property-icon' });
+    const value = property.createDiv({ cls: 'metadata-property-value', text: 'Value' });
+    vi.spyOn(sourceView, 'getBoundingClientRect').mockReturnValue({ bottom: 500, height: 500, left: 0, right: 1800, top: 0, width: 1800 } as DOMRect);
+    vi.spyOn(container, 'getBoundingClientRect').mockReturnValue({ bottom: 100, height: 100, left: 100, right: 900, top: 0, width: 800 } as DOMRect);
+    vi.spyOn(key, 'getBoundingClientRect').mockReturnValue({ bottom: 40, height: 20, left: 10, right: 250, top: 20, width: 240 } as DOMRect);
+    vi.spyOn(icon, 'getBoundingClientRect').mockReturnValue({ bottom: 40, height: 20, left: 10, right: 30, top: 20, width: 20 } as DOMRect);
+    vi.spyOn(value, 'getBoundingClientRect').mockReturnValue({ bottom: 40, height: 20, left: 250, right: 900, top: 20, width: 650 } as DOMRect);
+
+    component.onPointerMove(document, castTo<PointerEvent>({ clientX: 100, clientY: 30, target: key }));
+    expect(state.hoveredBreadcrumbField).toBe(property);
+    component.onPointerMove(document, castTo<PointerEvent>({ clientX: 800, clientY: 30, target: sourceView }));
+    expect(state.hoveredBreadcrumbField).toBeNull();
+    vi.advanceTimersByTime(121);
+    expect(state.popover).toBeNull();
+
+    settings.isFullWidthPropertyKeyHoverActivationEnabled = false;
+    // Obsidian themes can make the SVG itself pointer-transparent, leaving the key as the event target.
+    component.onPointerMove(document, castTo<PointerEvent>({ clientX: 20, clientY: 30, target: key }));
+    expect(state.hoveredBreadcrumbField).toBe(property);
+    component.onPointerMove(document, castTo<PointerEvent>({ clientX: 100, clientY: 30, target: key }));
+    expect(state.hoveredBreadcrumbField).toBeNull();
+    vi.advanceTimersByTime(121);
+    expect(state.popover).toBeNull();
+
+    sourceView.remove();
+    component.documentStates.delete(document);
+    Reflect.deleteProperty(window.HTMLElement.prototype, 'scrollIntoView');
+    vi.useRealTimers();
   });
 
   it('should resolve a Source-mode property line across its full editor width', () => {
@@ -390,10 +480,12 @@ describe('property field visual render guards', () => {
     const sourceView = document.body.createDiv({ cls: 'markdown-source-view mod-cm6' });
     const content = sourceView.createDiv({ cls: 'cm-content' });
     const line = content.createDiv({ cls: 'cm-line', text: 'root: value' });
+    const collapseIndicator = line.createDiv({ cls: 'collapse-indicator' });
     const foldGutter = sourceView.createDiv({ cls: 'cm-foldGutter' });
     const foldToggle = foldGutter.createDiv({ cls: 'cm-gutterElement', text: '⌄' });
     const emptyGutter = foldGutter.createDiv({ cls: 'cm-gutterElement' });
     vi.spyOn(line, 'getBoundingClientRect').mockReturnValue({ bottom: 40, height: 20, left: 10, right: 800, top: 20, width: 790 } as DOMRect);
+    vi.spyOn(collapseIndicator, 'getBoundingClientRect').mockReturnValue({ bottom: 40, height: 20, left: 10, right: 30, top: 20, width: 20 } as DOMRect);
     const createRange = vi.spyOn(document, 'createRange').mockReturnValue(castTo<Range>({
       getBoundingClientRect: () => ({ left: 10, right: 70, width: 60 }),
       getClientRects: () => [],
@@ -406,8 +498,22 @@ describe('property field visual render guards', () => {
     expect(resolveSourceBreadcrumbLineAtPointer(line, 90, 30, 'key')).toBeNull();
     expect(resolveSourceBreadcrumbLineAtPointer(foldToggle, 500, 30, 'toggle')).toBe(line);
     expect(resolveSourceBreadcrumbLineAtPointer(emptyGutter, 500, 30, 'toggle')).toBeNull();
-    expect(resolveSourceBreadcrumbLineAtPointer(line, 40, 30, 'toggle')).toBeNull();
+    expect(resolveSourceBreadcrumbLineAtPointer(line, 20, 30, 'toggle')).toBe(line);
+    expect(resolveSourceBreadcrumbLineAtPointer(line, 90, 30, 'toggle')).toBeNull();
     createRange.mockRestore();
+    sourceView.remove();
+  });
+
+  it('should resolve only lines owned by the active CodeMirror viewport', () => {
+    const sourceView = document.body.createDiv({ cls: 'markdown-source-view mod-cm6' });
+    const content = sourceView.createDiv({ cls: 'cm-content' });
+    const first = content.createDiv({ cls: 'cm-line', text: 'root: value' });
+    const stale = sourceView.createDiv({ cls: 'cm-line', text: 'stale: value' });
+    vi.spyOn(first, 'getBoundingClientRect').mockReturnValue({ bottom: 40, height: 20, top: 20 } as DOMRect);
+    vi.spyOn(stale, 'getBoundingClientRect').mockReturnValue({ bottom: 40, height: 20, top: 20 } as DOMRect);
+
+    expect(resolveCodeMirrorLineElementAtPointer(castTo<Parameters<typeof resolveCodeMirrorLineElementAtPointer>[0]>({ contentDOM: content }), sourceView, 30)).toBe(first);
+    expect(resolveCodeMirrorLineElementAtPointer(castTo<Parameters<typeof resolveCodeMirrorLineElementAtPointer>[0]>({ contentDOM: content }), stale, 30)).toBe(first);
     sourceView.remove();
   });
 
@@ -499,7 +605,7 @@ describe('property field visual render guards', () => {
     expect(computeTextReplacement(value, value)).toBeNull();
   });
 
-  it('should freeze the Live Preview property transaction at Ctrl+Z and replay it after an empty Ctrl+Y', () => {
+  it('should own escaped Live Preview property undo and redo without scrolling the editor selection', () => {
     vi.useFakeTimers();
     const settings = new PluginSettings();
     const component = castTo<TestPropertyFieldVisualsComponent>(
@@ -527,6 +633,20 @@ describe('property field visual render guards', () => {
         replaceRange
       }
     };
+    const dispatch = vi.fn((transaction: TestCodeMirrorChange): void => {
+      const { from, insert, to } = transaction.changes;
+      value = value.slice(0, from) + insert + value.slice(to);
+    });
+    const codeMirrorView = {
+      contentDOM: containerEl,
+      dispatch,
+      dom: containerEl,
+      state: {
+        doc: {
+          toString: (): string => value
+        }
+      }
+    };
     const state = castTo<TestDocumentState>({
       active: null,
       bodyStyleObserver: null,
@@ -552,18 +672,76 @@ describe('property field visual render guards', () => {
       sourceModeObservers: new Map()
     });
     component.documentStates.set(document, state);
+    component.codeMirrorViews.add(codeMirrorView);
 
     component.onKeyDown(document, castTo<KeyboardEvent>({ altKey: false, ctrlKey: false, key: 'Escape', metaKey: false, repeat: false, shiftKey: false, target: propertyInput }));
     expect(state.isPropertyRedoArmed).toBe(true);
-    component.onKeyDown(document, castTo<KeyboardEvent>({ altKey: false, ctrlKey: true, key: 'z', metaKey: false, repeat: false, shiftKey: false, target: propertyInput }));
-    value = before;
-    component.onKeyDown(document, castTo<KeyboardEvent>({ altKey: false, ctrlKey: true, key: 'y', metaKey: false, repeat: false, shiftKey: false }));
+    const undoPreventDefault = vi.fn();
+    const undoStopImmediatePropagation = vi.fn();
+    component.onKeyDown(
+      document,
+      castTo<KeyboardEvent>({
+        altKey: false,
+        ctrlKey: true,
+        key: 'z',
+        metaKey: false,
+        preventDefault: undoPreventDefault,
+        repeat: false,
+        shiftKey: false,
+        stopImmediatePropagation: undoStopImmediatePropagation,
+        target: propertyInput
+      })
+    );
+    expect(value).toBe(before);
+    expect(undoPreventDefault).toHaveBeenCalledTimes(1);
+    expect(undoStopImmediatePropagation).toHaveBeenCalledTimes(1);
+    const redoPreventDefault = vi.fn();
+    const redoStopImmediatePropagation = vi.fn();
+    component.onKeyDown(
+      document,
+      castTo<KeyboardEvent>({
+        altKey: false,
+        ctrlKey: true,
+        key: 'y',
+        metaKey: false,
+        preventDefault: redoPreventDefault,
+        repeat: false,
+        shiftKey: false,
+        stopImmediatePropagation: redoStopImmediatePropagation
+      })
+    );
     vi.runAllTimers();
 
-    expect(view.editor.redo).toHaveBeenCalledTimes(1);
-    expect(replaceRange).toHaveBeenCalledTimes(1);
+    expect(view.editor.redo).not.toHaveBeenCalled();
+    expect(replaceRange).not.toHaveBeenCalled();
+    expect(dispatch).toHaveBeenCalledTimes(2);
+    expect(dispatch.mock.calls[0]?.[0]).not.toHaveProperty('selection');
+    expect(dispatch.mock.calls[0]?.[0]).not.toHaveProperty('scrollIntoView');
+    expect(redoPreventDefault).toHaveBeenCalledTimes(1);
+    expect(redoStopImmediatePropagation).toHaveBeenCalledTimes(1);
     expect(value).toBe(after);
     expect(state.pendingPropertyRedo).toBeNull();
+
+    containerEl.classList.remove('is-live-preview');
+    const sourcePreventDefault = vi.fn();
+    component.onKeyDown(
+      document,
+      castTo<KeyboardEvent>({
+        altKey: false,
+        ctrlKey: true,
+        key: 'z',
+        metaKey: false,
+        preventDefault: sourcePreventDefault,
+        repeat: false,
+        shiftKey: false,
+        stopImmediatePropagation: vi.fn()
+      })
+    );
+    expect(sourcePreventDefault).not.toHaveBeenCalled();
+    expect(dispatch).toHaveBeenCalledTimes(2);
+    expect(value).toBe(after);
+
+    component.codeMirrorViews.clear();
     component.documentStates.delete(document);
     containerEl.remove();
     vi.useRealTimers();

@@ -2,6 +2,10 @@
 
 ## 2.0.0
 
+- fix: bind property hover hit testing to the complete Markdown source-view and select Live Preview metadata rows solely by vertical position across the editor viewport
+- fix: keep key-only and icon-only hover breadcrumbs scoped to their exact targets while preserving the interactive popover handoff delay
+- fix: resolve Source root and flattened property rows through the EditorView that delivered the pointer event, excluding stale virtualized lines from other tabs or editor views
+- fix: replace the escaped Live Preview Properties history fallback with exact, non-history CodeMirror undo/redo transactions that neither move the selection nor intercept Source-mode history
 - breaking: rename the plugin, manifest ID, command namespace, release assets, and installation folder to Nested Properties Advanced (`nested-properties-advanced`)
 - fix: register a CodeMirror view plugin for exact virtualized-line mapping, viewport updates, and `scrollDOM` repaint scheduling instead of cursor-nearest Source-line inference
 - fix: attach row-based pointer listeners directly to every rendered metadata container so full-field, full-key, and icon activation do not depend on Obsidian's bubbled event target

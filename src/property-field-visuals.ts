@@ -7,6 +7,7 @@ import type {
 } from '@codemirror/view';
 import type { App } from 'obsidian';
 
+import { Transaction } from '@codemirror/state';
 import { ViewPlugin } from '@codemirror/view';
 import {
   Component,
@@ -30,7 +31,6 @@ import {
 const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
 const POPOVER_HIDE_DELAY_IN_MILLISECONDS = 120;
 const PROPERTY_EDIT_CAPTURE_DELAYS_IN_MILLISECONDS = [0, 40, 120, 240] as const;
-const REDO_FALLBACK_DELAY_IN_MILLISECONDS = 40;
 const OWNED_VISUAL_SELECTOR = '.np-property-tree-overlay, .np-property-source-overlay, .np-property-breadcrumb-popover';
 const METADATA_CONTAINER_SELECTOR = '.metadata-container';
 const propertyFieldHitSnapshots = new WeakMap<HTMLElement, PropertyFieldHitSnapshot>();
@@ -204,6 +204,19 @@ export class PropertyFieldVisualsComponent extends Component {
       const scrollListener = (): void => this.onCodeMirrorScroll(view);
       const viewportMutationListener = (): void => this.onCodeMirrorViewportMutation(view);
       const ownerWindow = view.dom.ownerDocument.defaultView;
+      const sourceView = getCodeMirrorSourceView(view);
+      let pointerSurface = sourceView ?? view.dom;
+      function bindPointerSurface(): void {
+        const nextPointerSurface = getCodeMirrorSourceView(view) ?? view.dom;
+        if (nextPointerSurface === pointerSurface) {
+          return;
+        }
+        pointerSurface.removeEventListener('pointermove', pointerMoveListener, { capture: true });
+        pointerSurface.removeEventListener('pointerleave', pointerLeaveListener);
+        pointerSurface = nextPointerSurface;
+        pointerSurface.addEventListener('pointermove', pointerMoveListener, { capture: true, passive: true });
+        pointerSurface.addEventListener('pointerleave', pointerLeaveListener, { passive: true });
+      }
       const MutationObserverConstructor = ownerWindow?.MutationObserver;
       const contentObserver = MutationObserverConstructor === undefined ? null : new MutationObserverConstructor(viewportMutationListener);
       contentObserver?.observe(view.contentDOM, { attributeFilter: ['class'], attributes: true, childList: true, subtree: true });
@@ -211,24 +224,29 @@ export class PropertyFieldVisualsComponent extends Component {
       const resizeObserver = ResizeObserverConstructor === undefined ? null : new ResizeObserverConstructor(viewportMutationListener);
       resizeObserver?.observe(view.dom);
       resizeObserver?.observe(view.contentDOM);
-      const sourceView = getCodeMirrorSourceView(view);
       if (sourceView !== null) {
         resizeObserver?.observe(sourceView);
       }
-      view.dom.addEventListener('pointermove', pointerMoveListener, { capture: true, passive: true });
-      view.dom.addEventListener('pointerleave', pointerLeaveListener, { passive: true });
+      // Obsidian can mount the Live Preview Properties editor beside CodeMirror's inner `.cm-editor`.
+      // Some desktop layouts therefore need the common source view as their pointer surface.
+      // The source view contains both the metadata rows and the full horizontal editor viewport.
+      pointerSurface.addEventListener('pointermove', pointerMoveListener, { capture: true, passive: true });
+      pointerSurface.addEventListener('pointerleave', pointerLeaveListener, { passive: true });
       view.scrollDOM.addEventListener('scroll', scrollListener, { passive: true });
       this.registerCodeMirrorView(view);
       return {
         destroy: (): void => {
           contentObserver?.disconnect();
           resizeObserver?.disconnect();
-          view.dom.removeEventListener('pointermove', pointerMoveListener, { capture: true });
-          view.dom.removeEventListener('pointerleave', pointerLeaveListener);
+          pointerSurface.removeEventListener('pointermove', pointerMoveListener, { capture: true });
+          pointerSurface.removeEventListener('pointerleave', pointerLeaveListener);
           view.scrollDOM.removeEventListener('scroll', scrollListener);
           this.unregisterCodeMirrorView(view);
         },
-        update: (update: ViewUpdate): void => this.onCodeMirrorUpdate(update)
+        update: (update: ViewUpdate): void => {
+          bindPointerSurface();
+          this.onCodeMirrorUpdate(update);
+        }
       };
     });
   }
@@ -475,15 +493,7 @@ export class PropertyFieldVisualsComponent extends Component {
   }
 
   private onCodeMirrorPointerMove(view: EditorView, event: PointerEvent): void {
-    const target = event.target;
-    if (
-      getCodeMirrorSourceView(view)?.classList.contains('is-live-preview') === true
-      && target instanceof view.dom.ownerDocument.defaultView!.Element
-      && target.closest(METADATA_CONTAINER_SELECTOR) !== null
-    ) {
-      return;
-    }
-    this.onPointerMove(view.dom.ownerDocument, event);
+    this.onPointerMove(view.dom.ownerDocument, event, view);
   }
 
   private onCodeMirrorPointerLeave(view: EditorView): void {
@@ -505,7 +515,10 @@ export class PropertyFieldVisualsComponent extends Component {
   }
 
   private syncMetadataContainerListeners(ownerDocument: Document, state: DocumentState, containers: readonly HTMLElement[]): void {
-    const currentContainers = new Set(containers);
+    // CodeMirror's source-view listener owns Live Preview.
+    // Per-container listeners remain necessary for Reading mode, where there is no EditorView extension.
+    const directlyObservedContainers = containers.filter((container) => container.closest('.markdown-source-view.is-live-preview') === null);
+    const currentContainers = new Set(directlyObservedContainers);
     for (const [container, cleanup] of state.metadataContainerCleanups) {
       if (container.isConnected && currentContainers.has(container)) {
         continue;
@@ -513,7 +526,7 @@ export class PropertyFieldVisualsComponent extends Component {
       cleanup();
       state.metadataContainerCleanups.delete(container);
     }
-    for (const container of containers) {
+    for (const container of directlyObservedContainers) {
       if (state.metadataContainerCleanups.has(container)) {
         continue;
       }
@@ -541,7 +554,7 @@ export class PropertyFieldVisualsComponent extends Component {
     state.cleanups.push(() => ownerDocument.removeEventListener(type, listener));
   }
 
-  private onPointerMove(ownerDocument: Document, event: PointerEvent): void {
+  private onPointerMove(ownerDocument: Document, event: PointerEvent, codeMirrorView?: EditorView): void {
     const target = event.target;
     if (!(target instanceof ownerDocument.defaultView!.Element)) {
       return;
@@ -570,7 +583,9 @@ export class PropertyFieldVisualsComponent extends Component {
       return;
     }
 
-    const sourceLine = resolveSourceLineElementAtPointer(target, event.clientX, event.clientY);
+    const sourceLine = codeMirrorView === undefined
+      ? resolveSourceLineElementAtPointer(target, event.clientX, event.clientY)
+      : resolveCodeMirrorLineElementAtPointer(codeMirrorView, target, event.clientY);
     if (sourceLine === null || detectViewMode(sourceLine) !== 'source') {
       this.clearPointerActivation(ownerDocument);
       return;
@@ -581,7 +596,7 @@ export class PropertyFieldVisualsComponent extends Component {
       this.clearPointerActivation(ownerDocument);
       return;
     }
-    const breadcrumbLine = isBreadcrumbEnabled ? resolveSourceBreadcrumbLineAtPointer(target, event.clientX, event.clientY, this.getBreadcrumbActivationScope()) : null;
+    const breadcrumbLine = isBreadcrumbEnabled ? resolveSourceBreadcrumbLineAtPointer(target, event.clientX, event.clientY, this.getBreadcrumbActivationScope(), sourceLine) : null;
     const threadingLine = isHoverThreadingEnabled ? sourceLine : null;
     if (breadcrumbLine === null && threadingLine === null) {
       this.clearPointerActivation(ownerDocument);
@@ -595,7 +610,7 @@ export class PropertyFieldVisualsComponent extends Component {
       }
       return;
     }
-    const sourceTarget = this.resolveSourceTarget(sourceLine);
+    const sourceTarget = this.resolveSourceTarget(sourceLine, codeMirrorView);
     if (sourceTarget === null) {
       this.clearPointerActivation(ownerDocument);
       return;
@@ -802,8 +817,7 @@ export class PropertyFieldVisualsComponent extends Component {
 
   private onKeyDown(ownerDocument: Document, event: KeyboardEvent): void {
     const state = this.documentStates.get(ownerDocument);
-    const activeElement = ownerDocument.activeElement;
-    const eventElement = event.target instanceof ownerDocument.defaultView!.Element ? event.target : activeElement;
+    const eventElement = event.target instanceof ownerDocument.defaultView!.Element ? event.target : ownerDocument.activeElement;
     if (event.key === 'Escape' && eventElement instanceof ownerDocument.defaultView!.Element && eventElement.closest(METADATA_CONTAINER_SELECTOR) !== null) {
       if (state !== undefined) {
         state.isPropertyRedoArmed = true;
@@ -816,54 +830,62 @@ export class PropertyFieldVisualsComponent extends Component {
     if ((!isRedo && !isUndo) || event.repeat) {
       return;
     }
-    const isEscapedPropertyEditor = state?.isPropertyRedoArmed === true
-      && activeElement instanceof ownerDocument.defaultView!.Element
-      && activeElement.closest(METADATA_CONTAINER_SELECTOR) !== null;
-    if (activeElement instanceof ownerDocument.defaultView!.Element && !shouldUsePropertyRedoFallback(activeElement) && !isEscapedPropertyEditor) {
+    if (state?.isPropertyRedoArmed !== true) {
       return;
     }
-    const view = state?.lastPropertyEditorView;
-    const win = ownerDocument.defaultView;
-    if (state === undefined || view === null || view === undefined || win === null || !view.containerEl.isConnected) {
+    const view = state.lastPropertyEditorView;
+    if (!view?.containerEl.isConnected) {
       return;
     }
+    const currentValue = view.editor.getValue();
     if (isUndo) {
-      const currentValue = view.editor.getValue();
       const capturedEdit = state.lastPropertyEdit === null ? capturePropertyEditTransaction(state.propertyEditStart, currentValue) : null;
       const edit = state.lastPropertyEdit?.view === view && currentValue === state.lastPropertyEdit.after ? state.lastPropertyEdit : capturedEdit;
-      if (edit?.view === view && currentValue === edit.after) {
-        state.lastPropertyEdit = edit;
-        state.pendingPropertyRedo = edit;
-      }
-      return;
-    }
-    const beforeRedo = view.editor.getValue();
-    const redoEdit = state.pendingPropertyRedo ?? state.lastPropertyEdit;
-    if (redoEdit?.view !== view || beforeRedo !== redoEdit.before) {
-      return;
-    }
-    if (state.redoFallbackTimer !== null) {
-      win.clearTimeout(state.redoFallbackTimer);
-    }
-    // Let Obsidian's own Ctrl+Y command run first. If its metadata-field history bridge did not
-    // Mutate the document, try the Markdown editor and finally replay the exact captured edit.
-    state.redoFallbackTimer = win.setTimeout(() => {
-      if (!applyRedoFallback(view.editor, beforeRedo)) {
-        state.redoFallbackTimer = null;
-        if (redoEdit?.view === view && view.editor.getValue() === redoEdit.after) {
-          state.pendingPropertyRedo = null;
-        }
+      if (edit?.view !== view || currentValue !== edit.after || !this.applyPropertyEditTransaction(edit, 'undo')) {
         return;
       }
-      state.redoFallbackTimer = win.setTimeout(() => {
-        state.redoFallbackTimer = null;
-        const didReplay = view.editor.getValue() === beforeRedo && redoEdit?.view === view && applyRecordedPropertyEditRedo(view.editor, redoEdit);
-        if (didReplay || (redoEdit?.view === view && view.editor.getValue() === redoEdit.after)) {
-          state.pendingPropertyRedo = null;
-          state.isPropertyRedoArmed = false;
-        }
-      }, REDO_FALLBACK_DELAY_IN_MILLISECONDS);
-    }, REDO_FALLBACK_DELAY_IN_MILLISECONDS);
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      state.lastPropertyEdit = edit;
+      state.pendingPropertyRedo = edit;
+      return;
+    }
+    const redoEdit = state.pendingPropertyRedo ?? state.lastPropertyEdit;
+    if (redoEdit?.view !== view || currentValue !== redoEdit.before || !this.applyPropertyEditTransaction(redoEdit, 'redo')) {
+      return;
+    }
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    state.pendingPropertyRedo = null;
+  }
+
+  private applyPropertyEditTransaction(edit: PropertyEditTransaction, direction: 'redo' | 'undo'): boolean {
+    const codeMirrorView = this.findCodeMirrorView(edit.view.containerEl);
+    const sourceView = codeMirrorView === null ? null : getCodeMirrorSourceView(codeMirrorView);
+    if (codeMirrorView === null || sourceView?.classList.contains('is-live-preview') !== true) {
+      return false;
+    }
+    const before = direction === 'undo' ? edit.after : edit.before;
+    const after = direction === 'undo' ? edit.before : edit.after;
+    if (codeMirrorView.state.doc.toString() !== before) {
+      return false;
+    }
+    const replacement = computeTextReplacement(before, after);
+    if (replacement === null) {
+      return false;
+    }
+    // Obsidian's native Properties history bridge scrolls the editor selection to the end of
+    // Frontmatter and loses Ctrl+Y after Escape. Apply the exact captured change to the associated
+    // EditorView without creating another history item or requesting a selection scroll.
+    codeMirrorView.dispatch({
+      annotations: Transaction.addToHistory.of(false),
+      changes: {
+        from: replacement.start,
+        insert: replacement.replacement,
+        to: replacement.end
+      }
+    });
+    return codeMirrorView.state.doc.toString() === after;
   }
 
   private onFocusOut(ownerDocument: Document, event: FocusEvent): void {
@@ -1562,9 +1584,11 @@ export class PropertyFieldVisualsComponent extends Component {
       : settings.isPropertyFieldThreadingInReadingModeEnabled);
   }
 
-  private resolveSourceTarget(lineElement: HTMLElement): null | { node: SourcePropertyFieldNode; roots: SourcePropertyFieldNode[]; view: MarkdownView } {
+  private resolveSourceTarget(lineElement: HTMLElement, preferredCodeMirrorView?: EditorView): null | { node: SourcePropertyFieldNode; roots: SourcePropertyFieldNode[]; view: MarkdownView } {
     const view = this.findMarkdownView(lineElement.ownerDocument, lineElement);
-    const codeMirrorView = this.findCodeMirrorView(lineElement);
+    const codeMirrorView = preferredCodeMirrorView?.contentDOM.contains(lineElement) === true
+      ? preferredCodeMirrorView
+      : this.findCodeMirrorView(lineElement);
     if (view === null || codeMirrorView === null) {
       return null;
     }
@@ -1994,11 +2018,6 @@ export function resolveDomBreadcrumbPropertyAtPointer(target: Element, clientX: 
     return null;
   }
   if (scope === 'toggle') {
-    // A normal DOM hit inside the property must land on the actual toggle.
-    // Only use geometry when an overlay/container swallowed the child target.
-    if (entry.element.contains(target)) {
-      return null;
-    }
     const toggles = entry.element.querySelectorAll<HTMLElement>(':scope > .metadata-property-key .metadata-property-icon, :scope > .metadata-property-key .nested-properties-collapse-btn');
     return [...toggles].some((toggle) => isClientPointWithinRect(toggle.getBoundingClientRect(), clientX, clientY)) ? entry.element : null;
   }
@@ -2015,9 +2034,10 @@ export function resolveSourceLineElementAtPointer(target: Element, clientX: numb
   return sourceView === null ? null : findElementAtClientY(Array.from(sourceView.querySelectorAll<HTMLElement>('.cm-line')), clientY);
 }
 
-export function resolveSourceBreadcrumbLineAtPointer(target: Element, clientX: number, clientY: number, scope: BreadcrumbActivationScope): HTMLElement | null {
+export function resolveSourceBreadcrumbLineAtPointer(target: Element, clientX: number, clientY: number, scope: BreadcrumbActivationScope, resolvedLine?: HTMLElement): HTMLElement | null {
+  const line = resolvedLine ?? resolveSourceLineElementAtPointer(target, clientX, clientY);
   if (scope === 'field') {
-    return resolveSourceLineElementAtPointer(target, clientX, clientY);
+    return line;
   }
   if (scope === 'toggle') {
     return resolveSourceFoldToggleLineAtPointer(target, clientX, clientY);
@@ -2026,7 +2046,6 @@ export function resolveSourceBreadcrumbLineAtPointer(target: Element, clientX: n
   if (toggleLine !== null) {
     return toggleLine;
   }
-  const line = resolveSourceLineElementAtPointer(target, clientX, clientY);
   return line !== null && isClientXWithinSourceKeyColumn(line, clientX) ? line : null;
 }
 
@@ -2148,6 +2167,14 @@ function resolveSourceFoldToggleLineAtPointer(target: Element, clientX: number, 
   if (directToggle !== null) {
     return resolveSourceLineElementAtPointer(directToggle, clientX, clientY);
   }
+  const sourceView = resolveSourceViewAtPointer(target, clientX, clientY);
+  const geometricToggle = sourceView === null
+    ? undefined
+    : Array.from(sourceView.querySelectorAll<HTMLElement>('.collapse-indicator, .cm-foldMarker, .cm-fold-indicator, [aria-label*="fold" i]'))
+      .find((toggle) => isClientPointWithinRect(toggle.getBoundingClientRect(), clientX, clientY));
+  if (geometricToggle !== undefined) {
+    return resolveSourceLineElementAtPointer(geometricToggle, clientX, clientY);
+  }
   const gutterElement = target.closest<HTMLElement>('.cm-foldGutter .cm-gutterElement');
   if (gutterElement === null || (gutterElement.childNodes.length === 0 && gutterElement.textContent?.trim() === '')) {
     return null;
@@ -2159,6 +2186,12 @@ function resolveMetadataContainerAtPointer(target: Element, clientX: number, cli
   const directContainer = target.closest<HTMLElement>(METADATA_CONTAINER_SELECTOR);
   if (directContainer !== null) {
     return directContainer;
+  }
+  const livePreviewView = target.closest<HTMLElement>('.markdown-source-view.is-live-preview');
+  if (livePreviewView !== null) {
+    return getShownMetadataContainers(target.ownerDocument)
+      .filter((container) => livePreviewView.contains(container) && isClientYWithinRect(container.getBoundingClientRect(), clientY))
+      .sort((left, right) => left.getBoundingClientRect().height - right.getBoundingClientRect().height)[0] ?? null;
   }
   return getShownMetadataContainers(target.ownerDocument)
     .filter((container) => isClientPointWithinRect(container.getBoundingClientRect(), clientX, clientY))
@@ -2238,6 +2271,10 @@ function isClientPointWithinRect(rect: Pick<DOMRect, 'bottom' | 'left' | 'right'
   return Number.isFinite(clientX) && Number.isFinite(clientY) && clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom;
 }
 
+function isClientYWithinRect(rect: Pick<DOMRect, 'bottom' | 'top'>, clientY: number): boolean {
+  return Number.isFinite(clientY) && clientY >= rect.top && clientY <= rect.bottom;
+}
+
 export function findElementAtClientY(elements: readonly HTMLElement[], clientY: number): HTMLElement | null {
   const candidates = elements
     .map((element) => ({ element, rect: element.getBoundingClientRect() }))
@@ -2248,6 +2285,14 @@ export function findElementAtClientY(elements: readonly HTMLElement[], clientY: 
 
 function getCodeMirrorSourceView(view: EditorView): HTMLElement | null {
   return view.dom.closest<HTMLElement>('.markdown-source-view.mod-cm6, .markdown-source-view');
+}
+
+export function resolveCodeMirrorLineElementAtPointer(view: Pick<EditorView, 'contentDOM'>, target: Element, clientY: number): HTMLElement | null {
+  const directLine = target.closest<HTMLElement>('.cm-line');
+  if (directLine !== null && view.contentDOM.contains(directLine)) {
+    return directLine;
+  }
+  return findElementAtClientY(Array.from(view.contentDOM.querySelectorAll<HTMLElement>('.cm-line')), clientY);
 }
 
 export function resolveCodeMirrorDocumentLine(view: Pick<EditorView, 'posAtDOM' | 'state'>, lineElement: HTMLElement): number | null {
