@@ -67,7 +67,7 @@ interface TestDocumentLine {
 
 interface TestDocumentState {
   active: null | TestActiveField;
-  bodyStyleObserver: null;
+  bodyStyleObserver: MutationObserver | null;
   cleanups: (() => void)[];
   hideTimer: null;
   hoveredBreadcrumbField: HTMLElement | null;
@@ -77,7 +77,7 @@ interface TestDocumentState {
   lastPropertyEdit: unknown;
   lastPropertyEditorView: unknown;
   metadataContainerCleanups: Map<HTMLElement, () => void>;
-  mutationObserver: null;
+  mutationObserver: MutationObserver | null;
   pendingPropertyRedo: unknown;
   popover: HTMLElement | null;
   propertyEditCaptureTimer: null;
@@ -100,7 +100,9 @@ interface TestPropertyFieldVisualsComponent {
   codeMirrorViews: Set<unknown>;
   documentStates: Map<Document, TestDocumentState>;
   findMarkdownView(ownerDocument: Document, target: EventTarget | null): unknown;
+  observeDocument(ownerDocument: Document): void;
   onFocusIn(ownerDocument: Document, event: FocusEvent): void;
+  onFocusOut(ownerDocument: Document, event: FocusEvent): void;
   onKeyDown(ownerDocument: Document, event: KeyboardEvent): void;
   onPointerMove(ownerDocument: Document, event: PointerEvent, codeMirrorView?: unknown): void;
   syncMetadataContainerListeners(ownerDocument: Document, state: TestDocumentState, containers: readonly HTMLElement[]): void;
@@ -192,6 +194,45 @@ describe('property field visual render guards', () => {
     expect(resolveBreadcrumbActivationScope(true, true)).toBe('field');
     expect(resolveBreadcrumbActivationScope(false, true)).toBe('key');
     expect(resolveBreadcrumbActivationScope(false, false)).toBe('toggle');
+  });
+
+  it('should activate from the owning Markdown leaf when the visual row is not the pointer target', () => {
+    Object.defineProperty(window.HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+    const settings = new PluginSettings();
+    settings.isFullWidthPropertyFieldHoverActivationEnabled = true;
+    settings.isPropertyFieldThreadingEnabled = true;
+    const component = castTo<TestPropertyFieldVisualsComponent>(
+      new PropertyFieldVisualsComponent(castTo<ConstructorParameters<typeof PropertyFieldVisualsComponent>[0]>({
+        app: { workspace: { layoutReady: false } },
+        pluginSettingsComponent: { settings }
+      }))
+    );
+    component.observeDocument(document);
+    const state = component.documentStates.get(document);
+    const leaf = document.body.createDiv({ cls: 'workspace-leaf-content' });
+    const sourceView = leaf.createDiv({ cls: ['markdown-source-view', 'is-live-preview'] });
+    const container = sourceView.createDiv({ cls: 'metadata-container' });
+    const property = container.createDiv({ cls: 'metadata-property' });
+    const key = property.createDiv({ cls: 'metadata-property-key', text: 'Key' });
+    const value = property.createDiv({ cls: 'metadata-property-value', text: 'Value' });
+    vi.spyOn(container, 'isShown').mockReturnValue(true);
+    vi.spyOn(container, 'getBoundingClientRect').mockReturnValue({ bottom: 100, height: 100, left: 100, right: 900, top: 0, width: 800 } as DOMRect);
+    vi.spyOn(key, 'getBoundingClientRect').mockReturnValue({ bottom: 40, height: 20, left: 100, right: 300, top: 20, width: 200 } as DOMRect);
+    vi.spyOn(value, 'getBoundingClientRect').mockReturnValue({ bottom: 40, height: 20, left: 300, right: 900, top: 20, width: 600 } as DOMRect);
+
+    leaf.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 1600, clientY: 30 }));
+
+    expect(state?.active).toMatchObject({ element: property, kind: 'dom' });
+    expect(state?.hoveredBreadcrumbField).toBe(property);
+    state?.mutationObserver?.disconnect();
+    state?.bodyStyleObserver?.disconnect();
+    for (const cleanup of state?.cleanups ?? []) {
+      cleanup();
+    }
+    state?.popover?.remove();
+    leaf.remove();
+    component.documentStates.delete(document);
+    Reflect.deleteProperty(window.HTMLElement.prototype, 'scrollIntoView');
   });
 
   it('should resolve the full horizontal field from its vertical row band', () => {
@@ -389,16 +430,21 @@ describe('property field visual render guards', () => {
     const property = container.createDiv({ cls: 'metadata-property' });
     const key = property.createDiv({ cls: 'metadata-property-key' });
     const icon = key.createDiv({ cls: 'metadata-property-icon' });
+    const iconSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    icon.append(iconSvg);
     const collapse = key.createDiv({ cls: 'nested-properties-collapse-btn' });
     const value = property.createDiv({ cls: 'metadata-property-value' });
     vi.spyOn(key, 'getBoundingClientRect').mockReturnValue({ bottom: 40, height: 20, left: 10, right: 250, top: 20, width: 240 } as DOMRect);
-    vi.spyOn(icon, 'getBoundingClientRect').mockReturnValue({ bottom: 40, height: 20, left: 10, right: 30, top: 20, width: 20 } as DOMRect);
+    vi.spyOn(icon, 'getBoundingClientRect').mockReturnValue({ bottom: 40, height: 20, left: 10, right: 250, top: 20, width: 240 } as DOMRect);
+    vi.spyOn(iconSvg, 'getBoundingClientRect').mockReturnValue({ bottom: 40, height: 20, left: 10, right: 30, top: 20, width: 20 } as DOMRect);
+    vi.spyOn(collapse, 'getBoundingClientRect').mockReturnValue({ bottom: 40, height: 20, left: 10, right: 30, top: 20, width: 20 } as DOMRect);
     vi.spyOn(value, 'getBoundingClientRect').mockReturnValue({ bottom: 40, height: 20, left: 250, right: 900, top: 20, width: 650 } as DOMRect);
 
     expect(resolveDomBreadcrumbPropertyAtPointer(value, 800, 30, 'field')).toBe(property);
     expect(resolveDomBreadcrumbPropertyAtPointer(value, 200, 30, 'key')).toBe(property);
     expect(resolveDomBreadcrumbPropertyAtPointer(key, 300, 30, 'key')).toBeNull();
     expect(resolveDomBreadcrumbPropertyAtPointer(icon, 20, 30, 'toggle')).toBe(property);
+    expect(resolveDomBreadcrumbPropertyAtPointer(icon, 100, 30, 'toggle')).toBeNull();
     expect(resolveDomBreadcrumbPropertyAtPointer(collapse, 20, 30, 'toggle')).toBe(property);
     expect(resolveDomBreadcrumbPropertyAtPointer(container, 20, 30, 'toggle')).toBe(property);
     expect(resolveDomBreadcrumbPropertyAtPointer(key, 20, 30, 'toggle')).toBe(property);
@@ -706,6 +752,8 @@ describe('property field visual render guards', () => {
     component.findMarkdownView = (): unknown => view;
 
     component.onKeyDown(document, castTo<KeyboardEvent>({ altKey: false, ctrlKey: false, key: 'Escape', metaKey: false, repeat: false, shiftKey: false, target: propertyInput }));
+    expect(state.isPropertyRedoArmed).toBe(true);
+    component.onFocusOut(document, castTo<FocusEvent>({ relatedTarget: metadataContainer, target: propertyInput }));
     expect(state.isPropertyRedoArmed).toBe(true);
     const undoPreventDefault = vi.fn();
     const undoStopImmediatePropagation = vi.fn();

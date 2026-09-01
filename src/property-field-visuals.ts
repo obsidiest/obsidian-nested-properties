@@ -200,8 +200,6 @@ export class PropertyFieldVisualsComponent extends Component {
    */
   public createEditorExtension(): Extension {
     return ViewPlugin.define((view) => {
-      const pointerMoveListener = (event: PointerEvent): void => this.onCodeMirrorPointerMove(view, event);
-      const pointerLeaveListener = (): void => this.onCodeMirrorPointerLeave(view);
       const scrollListener = (): void => this.onCodeMirrorScroll(view);
       const viewportMutationListener = (): void => this.onCodeMirrorViewportMutation(view);
       const ownerWindow = view.dom.ownerDocument.defaultView;
@@ -216,19 +214,12 @@ export class PropertyFieldVisualsComponent extends Component {
       if (sourceView !== null) {
         resizeObserver?.observe(sourceView);
       }
-      // Keep each CodeMirror listener confined to its own editor. Live Preview metadata editors
-      // are observed directly below, so a shared source-view listener cannot let a second
-      // EditorView clear or replace the first view's pointer activation.
-      view.dom.addEventListener('pointermove', pointerMoveListener, { capture: true, passive: true });
-      view.dom.addEventListener('pointerleave', pointerLeaveListener, { passive: true });
       view.scrollDOM.addEventListener('scroll', scrollListener, { passive: true });
       this.registerCodeMirrorView(view);
       return {
         destroy: (): void => {
           contentObserver?.disconnect();
           resizeObserver?.disconnect();
-          view.dom.removeEventListener('pointermove', pointerMoveListener, { capture: true });
-          view.dom.removeEventListener('pointerleave', pointerLeaveListener);
           view.scrollDOM.removeEventListener('scroll', scrollListener);
           this.unregisterCodeMirrorView(view);
         },
@@ -343,6 +334,19 @@ export class PropertyFieldVisualsComponent extends Component {
     state.cleanups.push(() => ownerDocument.removeEventListener('keydown', keyDownListener, { capture: true }));
     this.listen(ownerDocument, state, 'keyup', () => this.onEditorCursorChanged(ownerDocument));
     this.listen(ownerDocument, state, 'mouseup', () => this.onEditorCursorChanged(ownerDocument));
+    // Obsidian's rendered Properties rows do not own the blank trailing width of their visual row.
+    // Listen at the document capture boundary and resolve the owning row from measured geometry,
+    // matching the proven full-row strategy used by List Tree Indentation Guides 1.1.0.
+    const pointerMoveListener = (event: PointerEvent): void => this.onPointerMove(ownerDocument, event);
+    ownerDocument.addEventListener('pointermove', pointerMoveListener, { capture: true, passive: true });
+    state.cleanups.push(() => ownerDocument.removeEventListener('pointermove', pointerMoveListener, { capture: true }));
+    const pointerOutListener = (event: PointerEvent): void => {
+      if (event.relatedTarget === null) {
+        this.clearPointerActivation(ownerDocument);
+      }
+    };
+    ownerDocument.addEventListener('pointerout', pointerOutListener, { capture: true, passive: true });
+    state.cleanups.push(() => ownerDocument.removeEventListener('pointerout', pointerOutListener, { capture: true }));
     const scrollListener = (event: Event): void => {
       const target = event.target;
       const container = target instanceof ownerDocument.defaultView!.Node ? asElement(target)?.closest<HTMLElement>(METADATA_CONTAINER_SELECTOR) ?? null : null;
@@ -481,14 +485,6 @@ export class PropertyFieldVisualsComponent extends Component {
     this.scheduleRender(view.dom.ownerDocument);
   }
 
-  private onCodeMirrorPointerMove(view: EditorView, event: PointerEvent): void {
-    this.onPointerMove(view.dom.ownerDocument, event, view);
-  }
-
-  private onCodeMirrorPointerLeave(view: EditorView): void {
-    this.clearPointerActivation(view.dom.ownerDocument);
-  }
-
   private findCodeMirrorView(element: Element): EditorView | null {
     const sourceView = element.matches('.markdown-source-view') ? element : element.closest('.markdown-source-view');
     for (const view of this.codeMirrorViews) {
@@ -503,10 +499,9 @@ export class PropertyFieldVisualsComponent extends Component {
     return null;
   }
 
-  private syncMetadataContainerListeners(ownerDocument: Document, state: DocumentState, containers: readonly HTMLElement[]): void {
-    // Bind every metadata editor directly. In Live Preview Obsidian can mount the Properties
-    // editor outside CodeMirror's `.cm-editor`; relying on a shared ancestor made blank key/value
-    // width stop producing pointer events and also left breadcrumbs active after their scope ended.
+  private syncMetadataContainerListeners(_ownerDocument: Document, state: DocumentState, containers: readonly HTMLElement[]): void {
+    // Pointer activation is owned by the document capture listener. Per-container listeners miss
+    // the trailing visual row width when Obsidian retargets that area to the Markdown leaf.
     const currentContainers = new Set(containers);
     for (const [container, cleanup] of state.metadataContainerCleanups) {
       if (container.isConnected && currentContainers.has(container)) {
@@ -519,20 +514,12 @@ export class PropertyFieldVisualsComponent extends Component {
       if (state.metadataContainerCleanups.has(container)) {
         continue;
       }
-      const activate = (event: PointerEvent): void => this.onPointerMove(ownerDocument, event);
-      const leave = (): void => this.clearPointerActivation(ownerDocument);
-      container.addEventListener('pointermove', activate, { capture: true, passive: true });
-      container.addEventListener('pointerover', activate, { capture: true, passive: true });
-      container.addEventListener('pointerleave', leave, { passive: true });
-      const ResizeObserverConstructor = ownerDocument.defaultView?.ResizeObserver;
+      const ResizeObserverConstructor = container.ownerDocument.defaultView?.ResizeObserver;
       const resizeObserver = ResizeObserverConstructor === undefined
         ? null
         : new ResizeObserverConstructor(() => this.invalidateContainer(container));
       resizeObserver?.observe(container);
       state.metadataContainerCleanups.set(container, () => {
-        container.removeEventListener('pointermove', activate, { capture: true });
-        container.removeEventListener('pointerover', activate, { capture: true });
-        container.removeEventListener('pointerleave', leave);
         resizeObserver?.disconnect();
       });
     }
@@ -556,11 +543,6 @@ export class PropertyFieldVisualsComponent extends Component {
       this.cancelPopoverHide(ownerDocument);
       return;
     }
-    if (target.closest(`${METADATA_CONTAINER_SELECTOR}, .markdown-source-view`) === null) {
-      this.clearPointerActivation(ownerDocument);
-      return;
-    }
-
     const propertyElement = resolveDomPropertyAtPointer(target, event.clientX, event.clientY);
     const metadataContainer = propertyElement?.closest<HTMLElement>(METADATA_CONTAINER_SELECTOR) ?? null;
     if (propertyElement !== null && metadataContainer !== null) {
@@ -792,8 +774,13 @@ export class PropertyFieldVisualsComponent extends Component {
         const currentValue = view.editor.getValue();
         const isPendingRedoFocus = state.isApplyingPropertyHistory
           || (state.pendingPropertyRedo?.view === view && currentValue === state.pendingPropertyRedo.before);
-        state.propertyEditStart = { before: currentValue, view };
-        if (!isPendingRedoFocus) {
+        const isEscapedEditFocusHandoff = state.isPropertyRedoArmed
+          && state.lastPropertyEdit === null
+          && state.propertyEditStart?.view === view;
+        if (!isEscapedEditFocusHandoff) {
+          state.propertyEditStart = { before: currentValue, view };
+        }
+        if (!isPendingRedoFocus && !isEscapedEditFocusHandoff) {
           state.isPropertyRedoArmed = false;
           state.lastPropertyEdit = null;
           state.pendingPropertyRedo = null;
@@ -940,8 +927,10 @@ export class PropertyFieldVisualsComponent extends Component {
     const state = this.documentStates.get(ownerDocument);
     if (target instanceof ownerDocument.defaultView!.Element && target.closest(METADATA_CONTAINER_SELECTOR) !== null && state !== undefined) {
       this.schedulePropertyEditCapture(ownerDocument, state);
-      const related = event.relatedTarget;
-      state.isPropertyRedoArmed = !(related instanceof ownerDocument.defaultView!.Element) || related.closest(METADATA_CONTAINER_SELECTOR) === null;
+      if (!state.isPropertyRedoArmed) {
+        const related = event.relatedTarget;
+        state.isPropertyRedoArmed = !(related instanceof ownerDocument.defaultView!.Element) || related.closest(METADATA_CONTAINER_SELECTOR) === null;
+      }
     }
     if (!this.pluginSettingsComponent.settings.isActiveCursorPropertyFieldThreadingEnabled) {
       return;
@@ -2063,12 +2052,6 @@ export function resolveDomBreadcrumbPropertyAtPointer(target: Element, clientX: 
   if (scope === 'field') {
     return resolveDomPropertyAtPointer(target, clientX, clientY);
   }
-  if (scope === 'toggle') {
-    const directToggle = target.closest<HTMLElement>('.metadata-property-icon, .nested-properties-collapse-btn');
-    if (directToggle !== null) {
-      return directToggle.closest<HTMLElement>('.metadata-property');
-    }
-  }
   const container = resolveMetadataContainerAtPointer(target, clientX, clientY);
   if (container === null) {
     return null;
@@ -2079,7 +2062,7 @@ export function resolveDomBreadcrumbPropertyAtPointer(target: Element, clientX: 
   }
   if (scope === 'toggle') {
     const toggles = entry.element.querySelectorAll<HTMLElement>(':scope > .metadata-property-key .metadata-property-icon, :scope > .metadata-property-key .nested-properties-collapse-btn');
-    return [...toggles].some((toggle) => isClientPointWithinRect(toggle.getBoundingClientRect(), clientX, clientY)) ? entry.element : null;
+    return [...toggles].some((toggle) => isClientPointWithinRect(getPointerActivationRect(toggle), clientX, clientY)) ? entry.element : null;
   }
   const key = entry.element.querySelector<HTMLElement>(':scope > .metadata-property-key');
   return key !== null && isClientPointWithinRect(key.getBoundingClientRect(), clientX, clientY) ? entry.element : null;
@@ -2224,14 +2207,14 @@ function createTextRange(element: HTMLElement, start: number, end: number): Rang
 
 function resolveSourceFoldToggleLineAtPointer(target: Element, clientX: number, clientY: number): HTMLElement | null {
   const directToggle = target.closest<HTMLElement>('.collapse-indicator, .cm-foldMarker, .cm-fold-indicator, [aria-label*="fold" i]');
-  if (directToggle !== null) {
+  if (directToggle !== null && isClientPointWithinRect(getPointerActivationRect(directToggle), clientX, clientY)) {
     return resolveSourceLineElementAtPointer(directToggle, clientX, clientY);
   }
   const sourceView = resolveSourceViewAtPointer(target, clientX, clientY);
   const geometricToggle = sourceView === null
     ? undefined
     : Array.from(sourceView.querySelectorAll<HTMLElement>('.collapse-indicator, .cm-foldMarker, .cm-fold-indicator, [aria-label*="fold" i]'))
-      .find((toggle) => isClientPointWithinRect(toggle.getBoundingClientRect(), clientX, clientY));
+      .find((toggle) => isClientPointWithinRect(getPointerActivationRect(toggle), clientX, clientY));
   if (geometricToggle !== undefined) {
     return resolveSourceLineElementAtPointer(geometricToggle, clientX, clientY);
   }
@@ -2239,13 +2222,24 @@ function resolveSourceFoldToggleLineAtPointer(target: Element, clientX: number, 
   if (gutterElement === null || (gutterElement.childNodes.length === 0 && gutterElement.textContent?.trim() === '')) {
     return null;
   }
-  return resolveSourceLineElementAtPointer(gutterElement, clientX, clientY);
+  return isClientPointWithinRect(gutterElement.getBoundingClientRect(), clientX, clientY)
+    ? resolveSourceLineElementAtPointer(gutterElement, clientX, clientY)
+    : null;
 }
 
 function resolveMetadataContainerAtPointer(target: Element, clientX: number, clientY: number): HTMLElement | null {
   const directContainer = target.closest<HTMLElement>(METADATA_CONTAINER_SELECTOR);
   if (directContainer !== null) {
     return directContainer;
+  }
+  const ownerSurface = target.closest<HTMLElement>('.workspace-leaf-content, .workspace-leaf, .markdown-view');
+  if (ownerSurface !== null) {
+    const surfaceContainer = getShownMetadataContainers(target.ownerDocument)
+      .filter((container) => ownerSurface.contains(container) && isClientYWithinRect(container.getBoundingClientRect(), clientY))
+      .sort((left, right) => left.getBoundingClientRect().height - right.getBoundingClientRect().height)[0];
+    if (surfaceContainer !== undefined) {
+      return surfaceContainer;
+    }
   }
   const livePreviewView = target.closest<HTMLElement>('.markdown-source-view.is-live-preview');
   if (livePreviewView !== null) {
@@ -2325,6 +2319,17 @@ function getDomPropertyDirectHitRect(property: HTMLElement): Pick<DOMRect, 'bott
   const top = Math.min(keyRect.top, valueRect.top);
   const bottom = Math.max(keyRect.bottom, valueRect.bottom);
   return { bottom, height: bottom - top, top };
+}
+
+function getPointerActivationRect(element: HTMLElement): Pick<DOMRect, 'bottom' | 'left' | 'right' | 'top'> {
+  const icon = element.querySelector<SVGElement>('svg');
+  if (icon !== null) {
+    const iconRect = icon.getBoundingClientRect();
+    if (iconRect.width > 0 && iconRect.height > 0) {
+      return iconRect;
+    }
+  }
+  return element.getBoundingClientRect();
 }
 
 function isClientPointWithinRect(rect: Pick<DOMRect, 'bottom' | 'left' | 'right' | 'top'>, clientX: number, clientY: number): boolean {
