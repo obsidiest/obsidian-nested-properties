@@ -111,3 +111,7 @@ export const config = defineObsidianPluginVitestConfig({
     }
   }
 });
+
+// The project scripts import the named export, while Vitest's direct --config loader requires this.
+// eslint-disable-next-line import-x/no-default-export -- Support Vitest's direct config-file loader.
+export default config;
