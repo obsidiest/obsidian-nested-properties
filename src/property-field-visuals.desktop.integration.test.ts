@@ -219,11 +219,18 @@ describe('property-field visuals in real Obsidian', () => {
         await waitForPopoverToHide('Full-field breadcrumb did not deactivate after leaving its row');
 
         await setScope(false, true);
-        const keyRect = keyElement.getBoundingClientRect();
-        moveMouse({ x: (keyRect.left + keyRect.right) / 2, y: rowY });
+        const keyInput = keyElement.querySelector<HTMLElement>('.metadata-property-key-input');
+        if (keyInput === null) {
+          throw new Error('Live Preview property key input was not found');
+        }
+        const keyInputRect = keyInput.getBoundingClientRect();
+        const keyIconRect = icon.getBoundingClientRect();
+        const keyContentLeft = Math.min(keyIconRect.left, keyInputRect.left);
+        const keyContentRight = Math.max(keyIconRect.right, keyInputRect.right);
+        moveMouse({ x: (keyContentLeft + keyContentRight) / 2, y: rowY });
         await waitForPopover('Full-key hover did not show its breadcrumb');
         const isFullKeyActivated = isPopoverVisible();
-        moveMouse({ x: Math.min(sourceRect.right - 24, keyRect.right + 80), y: rowY });
+        moveMouse({ x: Math.min(sourceRect.right - 24, keyContentRight + 80), y: rowY });
         await waitForPopoverToHide('Full-key breadcrumb remained active outside the property key');
         const isFullKeyDeactivated = !isPopoverVisible();
 
