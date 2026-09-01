@@ -556,6 +556,7 @@ describe('property field visual render guards', () => {
     const emptyGutter = foldGutter.createDiv({ cls: 'cm-gutterElement' });
     vi.spyOn(line, 'getBoundingClientRect').mockReturnValue({ bottom: 40, height: 20, left: 10, right: 800, top: 20, width: 790 } as DOMRect);
     vi.spyOn(collapseIndicator, 'getBoundingClientRect').mockReturnValue({ bottom: 40, height: 20, left: 10, right: 30, top: 20, width: 20 } as DOMRect);
+    vi.spyOn(foldToggle, 'getBoundingClientRect').mockReturnValue({ bottom: 40, height: 20, left: 490, right: 510, top: 20, width: 20 } as DOMRect);
     const createRange = vi.spyOn(document, 'createRange').mockReturnValue(castTo<Range>({
       getBoundingClientRect: () => ({ left: 10, right: 70, width: 60 }),
       getClientRects: () => [],
