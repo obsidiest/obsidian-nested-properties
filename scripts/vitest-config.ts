@@ -97,5 +97,17 @@ export const config = defineObsidianPluginVitestConfig({
     if (!process.allowedNodeEnvironmentFlags.has('--no-webstorage')) {
       context.unitTests.execArgv = [];
     }
+    const obsidianInstallerVersion = process.env['OBSIDIAN_INSTALLER_VERSION'];
+    if (obsidianInstallerVersion !== undefined) {
+      context.desktop.environmentOptions = {
+        obsidianTransport: {
+          isObsidianAppVisible: false,
+          obsidianInstallerVersion,
+          obsidianVersion: process.env['OBSIDIAN_VERSION'] ?? obsidianInstallerVersion,
+          shouldDisableSandbox: true,
+          type: 'obsidian-cdp'
+        }
+      };
+    }
   }
 });
