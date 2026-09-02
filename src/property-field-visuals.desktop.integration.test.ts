@@ -127,8 +127,8 @@ describe('property-field visuals in real Obsidian', () => {
           pressKey({ key: character });
         }
         await waitUntil({
-          message: 'Trusted input did not finish renaming the property key',
-          predicate: () => input.value === 'historyRootRenamed'
+          message: 'Trusted input did not synchronize the renamed key to the document',
+          predicate: () => input.value === 'historyRootRenamed' && markdownView.editor.getValue().includes('historyRootRenamed: original')
         });
         pressKey({ key: 'Escape' });
         await waitUntil({
