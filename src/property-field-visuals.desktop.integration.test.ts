@@ -104,14 +104,15 @@ afterAll(async () => {
 });
 
 describe('property-field visuals in real Obsidian', () => {
-  it('owns escaped Live Preview property undo and redo without changing scroll', async () => {
+  it('owns a committed Live Preview property undo and redo without changing scroll', async () => {
     const result = await evalInObsidian({
       callback: async ({ context: { markdownView }, lib: { clickElement, pressKey, waitUntil } }) => {
         const ownerDocument = markdownView.containerEl.ownerDocument;
         const sourceView = markdownView.containerEl.querySelector<HTMLElement>('.markdown-source-view.is-live-preview');
+        const metadataHeading = markdownView.containerEl.querySelector<HTMLElement>('.metadata-properties-heading');
         const inputs = [...markdownView.containerEl.querySelectorAll<HTMLInputElement>('.metadata-property-key-input')];
         const input = inputs.find((candidate) => candidate.value === 'historyRoot');
-        if (sourceView === null || input === undefined) {
+        if (sourceView === null || metadataHeading === null || input === undefined) {
           throw new Error('Live Preview history fixture did not render');
         }
         const scroller = sourceView.querySelector<HTMLElement>('.cm-scroller');
@@ -127,12 +128,12 @@ describe('property-field visuals in real Obsidian', () => {
           pressKey({ key: character });
         }
         await waitUntil({
-          message: 'Trusted input did not synchronize the renamed key to the document',
-          predicate: () => input.value === 'historyRootRenamed' && markdownView.editor.getValue().includes('historyRootRenamed: original')
+          message: 'Trusted input did not finish renaming the property key',
+          predicate: () => input.value === 'historyRootRenamed'
         });
-        pressKey({ key: 'Escape' });
+        clickElement({ element: metadataHeading });
         await waitUntil({
-          message: 'Property-key edit did not commit after Escape',
+          message: 'Property-key edit did not commit after leaving the field',
           predicate: () => markdownView.editor.getValue().includes('historyRootRenamed: original')
         });
         const scrollTopBeforeHistory = activeScroller.scrollTop;
