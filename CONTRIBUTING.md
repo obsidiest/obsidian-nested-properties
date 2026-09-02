@@ -10,8 +10,8 @@ Contributions are welcome! Here's how to get started.
 ## Setup
 
 ```bash
-git clone https://github.com/mnaoumov/obsidian-nested-properties.git
-cd obsidian-nested-properties
+git clone https://github.com/obsidiest/obsidian-nested-properties-advanced.git
+cd obsidian-nested-properties-advanced
 npm install
 ```
 
@@ -22,6 +22,10 @@ npm install
 ```bash
 npm run build
 ```
+
+The canonical production bundle is written to `dist/build/`. The build also
+mirrors its fresh `main.js` and `styles.css` to the repository root for local
+deployment tools that expect the standard flat Obsidian plugin layout.
 
 ### Dev Mode
 

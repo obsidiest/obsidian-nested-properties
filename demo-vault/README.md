@@ -1,10 +1,10 @@
-# Nested Properties demo vault
+# Nested Properties Advanced demo vault
 
-This is an [Obsidian](https://obsidian.md/) vault demonstrating features of the [Nested Properties](https://github.com/mnaoumov/obsidian-nested-properties) plugin.
+This is an [Obsidian](https://obsidian.md/) vault demonstrating features of the [Nested Properties Advanced](https://github.com/obsidiest/obsidian-nested-properties-advanced) plugin.
 
 ## Opening this vault
 
-- **If you already have the plugin installed**, run the **Nested Properties: Open demo vault** command — it downloads and opens the latest demo vault automatically.
-- **Otherwise**, download `nested-properties-demo-vault-<version>.zip` (`<version>` is the release version) from the [plugin releases](https://github.com/mnaoumov/obsidian-nested-properties/releases), unzip it, and in Obsidian choose `Manage vaults...` → `Open folder as vault` → select the unzipped folder.
+- **If you already have the plugin installed**, run the **Nested Properties Advanced: Open demo vault** command — it downloads and opens the latest demo vault automatically.
+- **Otherwise**, download `nested-properties-advanced-demo-vault-<version>.zip` (`<version>` is the release version) from the [plugin releases](https://github.com/obsidiest/obsidian-nested-properties-advanced/releases), unzip it, and in Obsidian choose `Manage vaults...` → `Open folder as vault` → select the unzipped folder.
 
 On first open, Obsidian treats the vault as untrusted — choose **Trust author and enable plugins** (or enable Community plugins manually), then open [00 Start](<./00 Start.md>).

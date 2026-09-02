@@ -2,7 +2,7 @@ name: Bug report
 description: Report a bug and help improve the plugin
 title: "[BUG] Don't forget to write a meaningful title"
 labels: bug
-assignees: mnaoumov
+assignees: obsidiest
 body:
   - type: markdown
     attributes:

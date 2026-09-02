@@ -1,11 +1,10 @@
 {
-  "author": "mnaoumov",
-  "authorUrl": "https://github.com/mnaoumov/",
-  "description": "Allows to view/edit nested frontmatter properties.",
-  "fundingUrl": "https://www.buymeacoffee.com/mnaoumov",
-  "id": "nested-properties",
+  "author": "obsidiest",
+  "authorUrl": "https://github.com/obsidiest",
+  "description": "Advanced nested frontmatter editing with property trees, guides, threading, and breadcrumbs.",
+  "id": "nested-properties-advanced",
   "isDesktopOnly": false,
-  "name": "Nested Properties",
-  "version": "1.4.4",
+  "name": "Nested Properties Advanced",
+  "version": "2.0.0",
   "minAppVersion": "1.13.7"
 }

@@ -17,15 +17,17 @@ import {
   convertAsyncToSync,
   invokeAsyncSafely
 } from 'obsidian-dev-utils/async';
-import { AllWindowsEventComponent } from 'obsidian-dev-utils/obsidian/components/all-windows-event-component';
 import { getAllDomWindows } from 'obsidian-dev-utils/obsidian/workspace';
 import { ensureNonNullable } from 'obsidian-dev-utils/type-guards';
+
+import type { BooleanSettingsKey } from './plugin-setting-tab.ts';
 
 import { FloatingScrollbarComponent } from './floating-scrollbar.ts';
 import { MetadataTypeManagerGetTypeInfoPatchComponent } from './patches/metadata-type-manager-get-type-info-patch-component.ts';
 import { MultiTextPropertyWidgetPatchComponent } from './patches/multi-text-property-widget-patch-component.ts';
 import { UnknownWidgetRenderPatchComponent } from './patches/unknown-widget-render-patch-component.ts';
 import { PluginSettingsComponent } from './plugin-settings-component.ts';
+import { dispatchPropertyFieldLayoutChange } from './property-field-events.ts';
 import { TypeChangeModal } from './type-change-modal.ts';
 import {
   convertValue,
@@ -37,6 +39,16 @@ import {
 const LIST_WIDGET_TYPE = 'list';
 const OBJECT_WIDGET_TYPE = 'object';
 const FULL_KEY_DISPLAY_BODY_CLASS = 'nested-properties-full-key-display';
+const GLOBAL_EXPANSION_SETTING_KEYS = new Set<BooleanSettingsKey>(['isGlobalCollapseAllNestedPropertiesEnabled', 'isGlobalExpandAllNestedPropertiesEnabled', 'isGlobalToggleAllNestedPropertiesEnabled']);
+const GLOBAL_FULL_KEY_SETTING_KEYS = new Set<BooleanSettingsKey>(['isGlobalCollapseFullKeyNamesEnabled', 'isGlobalExpandFullKeyNamesEnabled', 'isGlobalToggleFullKeyNamesEnabled']);
+const MAIN_UI_TOGGLE_DISABLED_CLASS = 'nested-properties-main-ui-toggle-disabled';
+const SOURCE_PATH_DATA_KEY = 'nestedPropertiesSourcePath';
+
+interface CreateNestedPropertyKeyInputParams {
+  readonly keyEl: HTMLElement;
+  readonly label: string;
+  readonly onKeyChange: ((newKey: string) => boolean) | null;
+}
 
 interface CreateSummaryParams {
   readonly expandedPaths: Set<string>;
@@ -47,9 +59,12 @@ interface CreateSummaryParams {
 }
 
 interface InjectHeaderButtonsParams {
-  readonly expandedPaths: Set<string>;
+  readonly isAllNestedPropertiesToggleEnabled: boolean;
+  readonly isFullKeyNamesExpanded: boolean;
+  readonly isFullKeyNamesToggleEnabled: boolean;
   readonly metadataContainerEl: HTMLElement;
-  onToggleFullKeyDisplay(this: void): void;
+  onAllNestedPropertiesStateChanged(this: void, isExpanded: boolean, metadataContainerEl: HTMLElement): void;
+  onToggleFullKeyDisplay(this: void, metadataContainerEl: HTMLElement): void;
 }
 
 interface NestedPropertyRendererComponentAddTypeSubmenuParams {
@@ -100,6 +115,7 @@ interface NestedPropertyRendererComponentRenderEntryParams {
   getValue(this: void): unknown;
   readonly label: string;
   onDelete(this: void): void;
+  readonly onKeyChange: ((newKey: string) => boolean) | null;
   onValueChange(this: void, newValue: unknown): void;
   readonly parentPath: string;
   readonly value: unknown;
@@ -109,6 +125,7 @@ interface NestedPropertyRendererComponentRenderKeyElParams {
   getValue(this: void): unknown;
   readonly label: string;
   onDelete(this: void): void;
+  readonly onKeyChange: ((newKey: string) => boolean) | null;
   onValueChange(this: void, newValue: unknown): void;
   readonly parentEl: HTMLElement;
   readonly path: string;
@@ -154,6 +171,7 @@ interface RenderAddPropertyButtonParams {
 }
 
 interface UpdateToggleButtonParams {
+  readonly isDisabled: boolean;
   readonly metadataContainerEl: HTMLElement;
   readonly toggleButton: HTMLElement;
 }
@@ -164,8 +182,10 @@ export class NestedPropertyRendererComponent extends Component {
   private _objectWidget?: PropertyWidget;
   private readonly app: App;
   private readonly expandedPaths = new Set<string>();
+  private readonly expansionStateByNote = new Map<string, boolean>();
   private floatingScrollbar?: FloatingScrollbarComponent;
-  private isFullKeyDisplayEnabled = false;
+  private readonly fullKeyNamesStateByNote = new Map<string, boolean>();
+  private readonly initializedExpansionPaths = new Set<string>();
   private lastMenuCloseTime = 0;
   private pendingFocusKey: null | string = null;
   private readonly pluginSettingsComponent: PluginSettingsComponent;
@@ -240,32 +260,36 @@ export class NestedPropertyRendererComponent extends Component {
         el.remove();
       }
       for (const win of getAllDomWindows(this.app)) {
-        win.document.body.removeClass(FULL_KEY_DISPLAY_BODY_CLASS);
+        for (const container of win.document.querySelectorAll<HTMLElement>('.metadata-container')) {
+          container.classList.remove(FULL_KEY_DISPLAY_BODY_CLASS);
+        }
       }
       this.reloadAllProperties();
-    });
-
-    this.isFullKeyDisplayEnabled = this.pluginSettingsComponent.settings.isFullKeyDisplayEnabled;
-
-    const allWindowsEventComponent = this.addChild(new AllWindowsEventComponent(this.app));
-    allWindowsEventComponent.registerAllWindowsHandler((win) => {
-      this.applyFullKeyDisplayClass(win);
     });
 
     this.floatingScrollbar = this.addChild(new FloatingScrollbarComponent(this.app));
     this.reloadAllProperties();
   }
 
-  public toggleFullKeyDisplay(): void {
-    this.isFullKeyDisplayEnabled = !this.isFullKeyDisplayEnabled;
-    for (const win of getAllDomWindows(this.app)) {
-      this.applyFullKeyDisplayClass(win);
+  public refreshSettings(changedKey?: BooleanSettingsKey, isEnabled?: boolean): void {
+    if (isEnabled === true && changedKey !== undefined && GLOBAL_EXPANSION_SETTING_KEYS.has(changedKey)) {
+      this.applyConfiguredGlobalExpansionState();
     }
-    invokeAsyncSafely(() =>
-      this.pluginSettingsComponent.editAndSave((settings) => {
-        settings.isFullKeyDisplayEnabled = this.isFullKeyDisplayEnabled;
-      })
-    );
+    if (isEnabled === true && changedKey !== undefined && GLOBAL_FULL_KEY_SETTING_KEYS.has(changedKey)) {
+      this.applyConfiguredGlobalFullKeyNamesState();
+    }
+    this.refreshMainUiControls();
+  }
+
+  public toggleFullKeyDisplay(metadataContainerEl?: HTMLElement): void {
+    const container = metadataContainerEl ?? this.findActiveMetadataContainer();
+    const sourcePath = container?.dataset[SOURCE_PATH_DATA_KEY];
+    if (container === undefined || sourcePath === undefined || !this.pluginSettingsComponent.settings.isPerNoteToggleFullKeyNamesEnabled) {
+      return;
+    }
+    const isExpanded = !container.classList.contains(FULL_KEY_DISPLAY_BODY_CLASS);
+    this.setFullKeyNamesState(sourcePath, isExpanded);
+    this.applyFullKeyNamesStateToNote(sourcePath, isExpanded, container);
   }
 
   // Add a "Property type" submenu that lists every registered widget and persists the chosen type
@@ -292,8 +316,96 @@ export class NestedPropertyRendererComponent extends Component {
     });
   }
 
-  private applyFullKeyDisplayClass(win: Window): void {
-    win.document.body.toggleClass(FULL_KEY_DISPLAY_BODY_CLASS, this.isFullKeyDisplayEnabled);
+  private applyConfiguredGlobalExpansionState(): void {
+    const settings = this.pluginSettingsComponent.settings;
+    if (!settings.isGlobalToggleAllNestedPropertiesEnabled) {
+      return;
+    }
+    const isExpanded = resolveGlobalToggleState(settings.isGlobalExpandAllNestedPropertiesEnabled, settings.isGlobalCollapseAllNestedPropertiesEnabled);
+    if (isExpanded === null) {
+      return;
+    }
+    this.expansionStateByNote.clear();
+    this.expandedPaths.clear();
+    this.initializedExpansionPaths.clear();
+    const rememberedStates: Record<string, boolean> = {};
+    for (const container of this.getMetadataContainers()) {
+      const sourcePath = container.dataset[SOURCE_PATH_DATA_KEY];
+      if (sourcePath === undefined) {
+        continue;
+      }
+      this.expansionStateByNote.set(sourcePath, isExpanded);
+      rememberedStates[sourcePath] = isExpanded;
+      this.applyExpansionStateToContainer(container, isExpanded);
+    }
+    if (settings.isRememberLastUsedMainUiToggleStatesEnabled && settings.isRememberAllNestedPropertiesExpansionToggleStateEnabled) {
+      invokeAsyncSafely(() =>
+        this.pluginSettingsComponent.editAndSave((value_) => {
+          value_.allNestedPropertiesExpansionStateByNote = rememberedStates;
+        })
+      );
+    }
+  }
+
+  private applyConfiguredGlobalFullKeyNamesState(): void {
+    const settings = this.pluginSettingsComponent.settings;
+    if (!settings.isGlobalToggleFullKeyNamesEnabled) {
+      return;
+    }
+    const isExpanded = resolveGlobalToggleState(settings.isGlobalExpandFullKeyNamesEnabled, settings.isGlobalCollapseFullKeyNamesEnabled);
+    if (isExpanded === null) {
+      return;
+    }
+    this.fullKeyNamesStateByNote.clear();
+    const rememberedStates: Record<string, boolean> = {};
+    for (const container of this.getMetadataContainers()) {
+      const sourcePath = container.dataset[SOURCE_PATH_DATA_KEY];
+      if (sourcePath === undefined) {
+        continue;
+      }
+      this.fullKeyNamesStateByNote.set(sourcePath, isExpanded);
+      rememberedStates[sourcePath] = isExpanded;
+      container.classList.toggle(FULL_KEY_DISPLAY_BODY_CLASS, isExpanded);
+      const button = container.querySelector<HTMLElement>('.nested-properties-full-key-toggle');
+      if (button !== null) {
+        setFullKeyToggleButtonState(button, isExpanded, !settings.isPerNoteToggleFullKeyNamesEnabled);
+      }
+    }
+    if (settings.isRememberLastUsedMainUiToggleStatesEnabled && settings.isRememberFullKeyNamesExpansionToggleStateEnabled) {
+      invokeAsyncSafely(() =>
+        this.pluginSettingsComponent.editAndSave((value_) => {
+          value_.fullKeyNamesExpansionStateByNote = rememberedStates;
+        })
+      );
+    }
+  }
+
+  private applyExpansionStateToContainer(container: HTMLElement, isExpanded: boolean): void {
+    const collapsibles = container.querySelectorAll<HTMLElement>('.nested-properties-collapsible');
+    if (isExpanded) {
+      expandAllIn(collapsibles, this.expandedPaths);
+    } else {
+      collapseAllIn(collapsibles, this.expandedPaths);
+    }
+    const button = container.querySelector<HTMLElement>('.nested-properties-all-toggle');
+    if (button !== null) {
+      setToggleButtonState(button, !isExpanded, !this.pluginSettingsComponent.settings.isPerNoteToggleAllNestedPropertiesEnabled);
+    }
+    dispatchPropertyFieldLayoutChange(container);
+  }
+
+  private applyFullKeyNamesStateToNote(sourcePath: string, isExpanded: boolean, initiatingContainer?: HTMLElement): void {
+    const containers = new Set(this.getMetadataContainers(sourcePath));
+    if (initiatingContainer !== undefined) {
+      containers.add(initiatingContainer);
+    }
+    for (const container of containers) {
+      container.classList.toggle(FULL_KEY_DISPLAY_BODY_CLASS, isExpanded);
+      const button = container.querySelector<HTMLElement>('.nested-properties-full-key-toggle');
+      if (button !== null) {
+        setFullKeyToggleButtonState(button, isExpanded, !this.pluginSettingsComponent.settings.isPerNoteToggleFullKeyNamesEnabled);
+      }
+    }
   }
 
   private async changeType(params: NestedPropertyRendererComponentChangeTypeParams): Promise<void> {
@@ -328,6 +440,17 @@ export class NestedPropertyRendererComponent extends Component {
     }
   }
 
+  private findActiveMetadataContainer(): HTMLElement | undefined {
+    const activeElement = activeDocument.activeElement;
+    if (activeElement instanceof HTMLElement) {
+      const container = activeElement.closest<HTMLElement>('.metadata-container');
+      if (container !== null) {
+        return container;
+      }
+    }
+    return activeDocument.querySelector<HTMLElement>(':scope .workspace-leaf.mod-active .metadata-container') ?? activeDocument.querySelector<HTMLElement>(':scope .metadata-container') ?? undefined;
+  }
+
   // Resolve the persisted widget for a node, honouring the layered read order:
   // Per-index override (`versions.0.released`) -> collapsed per-field default (`versions.released`).
   // Returns undefined when nothing is assigned so the caller can fall back to value inference.
@@ -339,12 +462,88 @@ export class NestedPropertyRendererComponent extends Component {
     return assignedType ? metadataTypeManager.registeredTypeWidgets[assignedType] : undefined;
   }
 
+  private getInitialExpansionState(sourcePath: string): boolean {
+    const sessionState = this.expansionStateByNote.get(sourcePath);
+    if (sessionState !== undefined) {
+      return sessionState;
+    }
+    const settings = this.pluginSettingsComponent.settings;
+    const rememberedState = settings.allNestedPropertiesExpansionStateByNote[sourcePath];
+    const isExpanded = settings.isRememberLastUsedMainUiToggleStatesEnabled && settings.isRememberAllNestedPropertiesExpansionToggleStateEnabled && typeof rememberedState === 'boolean'
+      ? rememberedState
+      : (settings.isGlobalToggleAllNestedPropertiesEnabled
+        ? resolveGlobalToggleState(settings.isGlobalExpandAllNestedPropertiesEnabled, settings.isGlobalCollapseAllNestedPropertiesEnabled) ?? false
+        : false);
+    this.expansionStateByNote.set(sourcePath, isExpanded);
+    return isExpanded;
+  }
+
+  private getInitialFullKeyNamesState(sourcePath: string): boolean {
+    const sessionState = this.fullKeyNamesStateByNote.get(sourcePath);
+    if (sessionState !== undefined) {
+      return sessionState;
+    }
+    const settings = this.pluginSettingsComponent.settings;
+    const rememberedState = settings.fullKeyNamesExpansionStateByNote[sourcePath];
+    const isExpanded = settings.isRememberLastUsedMainUiToggleStatesEnabled && settings.isRememberFullKeyNamesExpansionToggleStateEnabled && typeof rememberedState === 'boolean'
+      ? rememberedState
+      : (settings.isGlobalToggleFullKeyNamesEnabled
+        ? resolveGlobalToggleState(settings.isGlobalExpandFullKeyNamesEnabled, settings.isGlobalCollapseFullKeyNamesEnabled) ?? false
+        : false);
+    this.fullKeyNamesStateByNote.set(sourcePath, isExpanded);
+    return isExpanded;
+  }
+
+  private getMetadataContainers(sourcePath?: string): HTMLElement[] {
+    const containers: HTMLElement[] = [];
+    for (const win of getAllDomWindows(this.app)) {
+      for (const container of win.document.querySelectorAll<HTMLElement>('.metadata-container')) {
+        if (sourcePath === undefined || container.dataset[SOURCE_PATH_DATA_KEY] === sourcePath) {
+          containers.push(container);
+        }
+      }
+    }
+    return containers;
+  }
+
   private getWidget(params: NestedPropertyRendererComponentGetWidgetParams): PropertyWidget {
     const { label, path, value } = params;
     // Keep the inference fallback keyed on the leaf `label` (not the dotted key): `.inferred` is
     // Value-based and flows through the `getTypeInfo` patch, and it avoids a top-level property named
     // E.g. `released` bleeding its assigned type onto every nested `*.released`.
     return this.getAssignedWidgetForPath(path) ?? this.app.metadataTypeManager.getTypeInfo(label, value).inferred;
+  }
+
+  private initializeExpansionPath(path: string, sourcePath: string): void {
+    if (this.initializedExpansionPaths.has(path)) {
+      return;
+    }
+    this.initializedExpansionPaths.add(path);
+    if (this.getInitialExpansionState(sourcePath)) {
+      this.expandedPaths.add(path);
+    } else {
+      this.expandedPaths.delete(path);
+    }
+  }
+
+  private refreshMainUiControls(): void {
+    const settings = this.pluginSettingsComponent.settings;
+    for (const container of this.getMetadataContainers()) {
+      const sourcePath = container.dataset[SOURCE_PATH_DATA_KEY];
+      if (sourcePath === undefined) {
+        continue;
+      }
+      const isFullKeyNamesExpanded = this.getInitialFullKeyNamesState(sourcePath);
+      container.classList.toggle(FULL_KEY_DISPLAY_BODY_CLASS, isFullKeyNamesExpanded);
+      const expansionButton = container.querySelector<HTMLElement>('.nested-properties-all-toggle');
+      if (expansionButton !== null) {
+        updateToggleButton({ isDisabled: !settings.isPerNoteToggleAllNestedPropertiesEnabled, metadataContainerEl: container, toggleButton: expansionButton });
+      }
+      const fullKeyButton = container.querySelector<HTMLElement>('.nested-properties-full-key-toggle');
+      if (fullKeyButton !== null) {
+        setFullKeyToggleButtonState(fullKeyButton, isFullKeyNamesExpanded, !settings.isPerNoteToggleFullKeyNamesEnabled);
+      }
+    }
   }
 
   private reloadAllProperties(): void {
@@ -371,6 +570,7 @@ export class NestedPropertyRendererComponent extends Component {
           const newArray = array.filter((_, index_) => index_ !== index);
           onArrayChange(newArray);
         },
+        onKeyChange: null,
         onValueChange: (newValue: unknown) => {
           array[index] = newValue;
           onArrayChange([...array]);
@@ -399,6 +599,7 @@ export class NestedPropertyRendererComponent extends Component {
     value = structuredClone(value);
 
     const rootPath = `${context.sourcePath}:${context.key}`;
+    this.initializeExpansionPath(rootPath, context.sourcePath);
 
     const propertyEl = el.closest('.metadata-property');
     if (propertyEl instanceof HTMLElement) {
@@ -429,6 +630,7 @@ export class NestedPropertyRendererComponent extends Component {
           } else {
             this.expandedPaths.delete(rootPath);
           }
+          dispatchPropertyFieldLayoutChange(propertyEl);
           this.floatingScrollbar?.update();
         });
       }
@@ -460,11 +662,19 @@ export class NestedPropertyRendererComponent extends Component {
     window.setTimeout(() => {
       const metadataContainerEl = containerEl.closest('.metadata-container');
       if (metadataContainerEl instanceof HTMLElement) {
+        metadataContainerEl.dataset[SOURCE_PATH_DATA_KEY] = context.sourcePath;
+        const isFullKeyNamesExpanded = this.getInitialFullKeyNamesState(context.sourcePath);
+        metadataContainerEl.classList.toggle(FULL_KEY_DISPLAY_BODY_CLASS, isFullKeyNamesExpanded);
         injectHeaderButtons({
-          expandedPaths: this.expandedPaths,
+          isAllNestedPropertiesToggleEnabled: this.pluginSettingsComponent.settings.isPerNoteToggleAllNestedPropertiesEnabled,
+          isFullKeyNamesExpanded,
+          isFullKeyNamesToggleEnabled: this.pluginSettingsComponent.settings.isPerNoteToggleFullKeyNamesEnabled,
           metadataContainerEl,
-          onToggleFullKeyDisplay: () => {
-            this.toggleFullKeyDisplay();
+          onAllNestedPropertiesStateChanged: (isExpanded, container) => {
+            this.setAllNestedPropertiesState(context.sourcePath, isExpanded, container);
+          },
+          onToggleFullKeyDisplay: (container) => {
+            this.toggleFullKeyDisplay(container);
           }
         });
         sizeTopLevelKeyInputs(metadataContainerEl);
@@ -501,13 +711,14 @@ export class NestedPropertyRendererComponent extends Component {
   }
 
   private renderEntry(params: NestedPropertyRendererComponentRenderEntryParams): void {
-    const { containerEl, context, getValue, label, onDelete, onValueChange, parentPath, value } = params;
+    const { containerEl, context, getValue, label, onDelete, onKeyChange, onValueChange, parentPath, value } = params;
     const path = `${parentPath}.${label}`;
     const assignedWidget = this.getAssignedWidgetForPath(path);
     const isComplex = assignedWidget?.type === LIST_WIDGET_TYPE || assignedWidget?.type === OBJECT_WIDGET_TYPE
       || (isComplexValue(value) && !isSimpleArray(value));
 
     if (isComplex) {
+      this.initializeExpansionPath(path, context.sourcePath);
       const isExpanded = this.expandedPaths.has(path);
       const propertyEl = containerEl.createDiv({
         attr: { 'data-path': path },
@@ -532,6 +743,7 @@ export class NestedPropertyRendererComponent extends Component {
         } else {
           this.expandedPaths.delete(path);
         }
+        dispatchPropertyFieldLayoutChange(propertyEl);
       });
 
       const complexWidget = this.getWidget({ label, path, value });
@@ -541,12 +753,7 @@ export class NestedPropertyRendererComponent extends Component {
         $event.stopPropagation();
         this.showNestedPropertyMenu({ $event, getValue, label, onDelete, onValueChange, path });
       });
-      const keyInput = keyEl.createEl('input', {
-        attr: { readonly: '', tabindex: '-1' },
-        cls: 'metadata-property-key-input',
-        value: label
-      });
-      keyInput.size = Math.max(1, label.length);
+      createNestedPropertyKeyInput({ keyEl, label, onKeyChange });
 
       const valueEl = propertyEl.createDiv({ cls: 'metadata-property-value' });
       createSummary({ expandedPaths: this.expandedPaths, parentEl: valueEl, path, propertyEl, value });
@@ -554,12 +761,12 @@ export class NestedPropertyRendererComponent extends Component {
       this.renderNestedValue({ containerEl: nestedContainer, context, onValueChange, path, value });
       return;
     }
-    const propertyEl = containerEl.createDiv({ cls: 'metadata-property' });
+    const propertyEl = containerEl.createDiv({ attr: { 'data-path': path }, cls: 'metadata-property' });
     propertyEl.addEventListener('contextmenu', ($event) => {
       $event.stopPropagation();
       this.showNestedPropertyMenu({ $event, getValue, label, onDelete, onValueChange, path });
     });
-    this.renderKeyEl({ getValue, label, onDelete, onValueChange, parentEl: propertyEl, path, value });
+    this.renderKeyEl({ getValue, label, onDelete, onKeyChange, onValueChange, parentEl: propertyEl, path, value });
 
     const widget = this.getWidget({ label, path, value });
     const valueEl = propertyEl.createDiv({ cls: 'metadata-property-value' });
@@ -574,7 +781,7 @@ export class NestedPropertyRendererComponent extends Component {
   }
 
   private renderKeyEl(params: NestedPropertyRendererComponentRenderKeyElParams): void {
-    const { getValue, label, onDelete, onValueChange, parentEl, path, value } = params;
+    const { getValue, label, onDelete, onKeyChange, onValueChange, parentEl, path, value } = params;
     const keyEl = parentEl.createDiv({ cls: 'metadata-property-key' });
 
     const widget = this.getWidget({ label, path, value });
@@ -585,12 +792,7 @@ export class NestedPropertyRendererComponent extends Component {
       this.showNestedPropertyMenu({ $event, getValue, label, onDelete, onValueChange, path });
     });
 
-    const keyInput = keyEl.createEl('input', {
-      attr: { readonly: '', tabindex: '-1' },
-      cls: 'metadata-property-key-input',
-      value: label
-    });
-    keyInput.size = Math.max(1, label.length);
+    createNestedPropertyKeyInput({ keyEl, label, onKeyChange });
   }
 
   private renderNestedValue(params: NestedPropertyRendererComponentRenderNestedValueParams): void {
@@ -616,6 +818,14 @@ export class NestedPropertyRendererComponent extends Component {
           delete newObject[key];
           onValueChange(newObject);
         },
+        onKeyChange: (newKey) => {
+          const renamedObject = renameObjectKey($object, key, newKey);
+          if (renamedObject === null) {
+            return false;
+          }
+          onValueChange(renamedObject);
+          return true;
+        },
         onValueChange: (newValue: unknown) => {
           $object[key] = newValue;
           onValueChange({ ...$object });
@@ -632,6 +842,37 @@ export class NestedPropertyRendererComponent extends Component {
         this.pendingFocusKey = key;
       }
     });
+  }
+
+  private setAllNestedPropertiesState(sourcePath: string, isExpanded: boolean, initiatingContainer?: HTMLElement): void {
+    this.expansionStateByNote.set(sourcePath, isExpanded);
+    const containers = new Set(this.getMetadataContainers(sourcePath));
+    if (initiatingContainer !== undefined) {
+      containers.add(initiatingContainer);
+    }
+    for (const container of containers) {
+      this.applyExpansionStateToContainer(container, isExpanded);
+    }
+    const settings = this.pluginSettingsComponent.settings;
+    if (settings.isRememberLastUsedMainUiToggleStatesEnabled && settings.isRememberAllNestedPropertiesExpansionToggleStateEnabled) {
+      invokeAsyncSafely(() =>
+        this.pluginSettingsComponent.editAndSave((value) => {
+          value.allNestedPropertiesExpansionStateByNote = { ...value.allNestedPropertiesExpansionStateByNote, [sourcePath]: isExpanded };
+        })
+      );
+    }
+  }
+
+  private setFullKeyNamesState(sourcePath: string, isExpanded: boolean): void {
+    this.fullKeyNamesStateByNote.set(sourcePath, isExpanded);
+    const settings = this.pluginSettingsComponent.settings;
+    if (settings.isRememberLastUsedMainUiToggleStatesEnabled && settings.isRememberFullKeyNamesExpansionToggleStateEnabled) {
+      invokeAsyncSafely(() =>
+        this.pluginSettingsComponent.editAndSave((value) => {
+          value.fullKeyNamesExpansionStateByNote = { ...value.fullKeyNamesExpansionStateByNote, [sourcePath]: isExpanded };
+        })
+      );
+    }
   }
 
   private showNestedPropertyMenu(params: NestedPropertyRendererComponentShowNestedPropertyMenuParams): void {
@@ -731,14 +972,71 @@ export class NestedPropertyRendererComponent extends Component {
   }
 }
 
-function collapseAllIn(parentNode: ParentNode, expandedPaths: Set<string>): void {
-  for (const el of parentNode.querySelectorAll<HTMLElement>(':scope .nested-properties-collapsible')) {
+export function renameObjectKey($object: GenericObject, oldKey: string, requestedKey: string): GenericObject | null {
+  const newKey = requestedKey.trim();
+  if (newKey === '' || newKey === oldKey || Object.keys($object).includes(newKey) || !Object.keys($object).includes(oldKey)) {
+    return null;
+  }
+  return Object.fromEntries(Object.entries($object).map(([key, value]) => [key === oldKey ? newKey : key, value]));
+}
+
+export function resolveGlobalToggleState(isExpandEnabled: boolean, isCollapseEnabled: boolean): boolean | null {
+  return isCollapseEnabled ? false : (isExpandEnabled ? true : null);
+}
+
+function collapseAllIn(collapsibles: Iterable<HTMLElement>, expandedPaths: Set<string>): void {
+  for (const el of collapsibles) {
     el.classList.add('is-collapsed');
     const path = el.dataset['path'];
     if (path) {
       expandedPaths.delete(path);
     }
   }
+}
+
+function createNestedPropertyKeyInput(params: CreateNestedPropertyKeyInputParams): HTMLInputElement {
+  const { keyEl, label, onKeyChange } = params;
+  const keyInput = keyEl.createEl('input', {
+    attr: onKeyChange === null
+      ? { readonly: '', tabindex: '-1' }
+      : { 'aria-label': `Edit nested property key ${label}`, 'spellcheck': 'false', 'type': 'text' },
+    cls: 'metadata-property-key-input',
+    value: label
+  });
+  keyInput.size = Math.max(1, label.length);
+  if (onKeyChange === null) {
+    return keyInput;
+  }
+
+  function restore(): void {
+    keyInput.value = label;
+    keyInput.size = Math.max(1, label.length);
+  }
+  keyInput.addEventListener('input', () => {
+    keyInput.size = Math.max(1, keyInput.value.length);
+  });
+  keyInput.addEventListener('keydown', ($event) => {
+    $event.stopPropagation();
+    if ($event.key === 'Enter') {
+      $event.preventDefault();
+      keyInput.blur();
+    } else if ($event.key === 'Escape') {
+      $event.preventDefault();
+      restore();
+      keyInput.blur();
+    }
+  });
+  keyInput.addEventListener('blur', () => {
+    const newKey = keyInput.value.trim();
+    if (newKey === label) {
+      restore();
+      return;
+    }
+    if (newKey === '' || !onKeyChange(newKey)) {
+      restore();
+    }
+  });
+  return keyInput;
 }
 
 function createSummary(params: CreateSummaryParams): void {
@@ -749,11 +1047,12 @@ function createSummary(params: CreateSummaryParams): void {
     $event.preventDefault();
     propertyEl.classList.remove('is-collapsed');
     expandedPaths.add(path);
+    dispatchPropertyFieldLayoutChange(propertyEl);
   });
 }
 
-function expandAllIn(parentNode: ParentNode, expandedPaths: Set<string>): void {
-  for (const el of parentNode.querySelectorAll<HTMLElement>(':scope .nested-properties-collapsible')) {
+function expandAllIn(collapsibles: Iterable<HTMLElement>, expandedPaths: Set<string>): void {
+  for (const el of collapsibles) {
     el.classList.remove('is-collapsed');
     const path = el.dataset['path'];
     if (path) {
@@ -783,7 +1082,7 @@ function getItemTypeKey(path: string): string {
 }
 
 function injectHeaderButtons(params: InjectHeaderButtonsParams): void {
-  const { expandedPaths, metadataContainerEl, onToggleFullKeyDisplay } = params;
+  const { isAllNestedPropertiesToggleEnabled, isFullKeyNamesExpanded, isFullKeyNamesToggleEnabled, metadataContainerEl, onAllNestedPropertiesStateChanged, onToggleFullKeyDisplay } = params;
   if (metadataContainerEl.querySelector('.nested-properties-header-actions')) {
     return;
   }
@@ -800,29 +1099,29 @@ function injectHeaderButtons(params: InjectHeaderButtonsParams): void {
   const actionsEl = metadataContainerEl.createDiv({ cls: 'nested-properties-header-actions' });
   headingEl.after(actionsEl);
 
-  const toggleButton = actionsEl.createDiv({ cls: 'clickable-icon' });
-  updateToggleButton({ metadataContainerEl, toggleButton });
+  const toggleButton = actionsEl.createDiv({ cls: 'clickable-icon nested-properties-all-toggle' });
+  updateToggleButton({ isDisabled: !isAllNestedPropertiesToggleEnabled, metadataContainerEl, toggleButton });
 
   toggleButton.addEventListener('click', ($event) => {
     $event.stopPropagation();
     $event.preventDefault();
-    const allCollapsibles = metadataContainerEl.querySelectorAll('.nested-properties-collapsible');
-    const isAllCollapsed = allCollapsibles.length > 0 && [...allCollapsibles].every((el) => el.classList.contains('is-collapsed'));
-    if (isAllCollapsed) {
-      expandAllIn(metadataContainerEl, expandedPaths);
-    } else {
-      collapseAllIn(metadataContainerEl, expandedPaths);
+    if (toggleButton.classList.contains(MAIN_UI_TOGGLE_DISABLED_CLASS)) {
+      return;
     }
-    updateToggleButton({ metadataContainerEl, toggleButton });
+    const allCollapsibles = metadataContainerEl.querySelectorAll<HTMLElement>('.nested-properties-collapsible');
+    const isAllCollapsed = allCollapsibles.length > 0 && [...allCollapsibles].every((el) => el.classList.contains('is-collapsed'));
+    onAllNestedPropertiesStateChanged(isAllCollapsed, metadataContainerEl);
   });
 
   const fullKeyToggleButton = actionsEl.createDiv({ cls: 'clickable-icon nested-properties-full-key-toggle' });
   setIcon(fullKeyToggleButton, 'lucide-wrap-text');
-  fullKeyToggleButton.setAttribute('aria-label', 'Toggle full key display');
+  setFullKeyToggleButtonState(fullKeyToggleButton, isFullKeyNamesExpanded, !isFullKeyNamesToggleEnabled);
   fullKeyToggleButton.addEventListener('click', ($event) => {
     $event.stopPropagation();
     $event.preventDefault();
-    onToggleFullKeyDisplay();
+    if (!fullKeyToggleButton.classList.contains(MAIN_UI_TOGGLE_DISABLED_CLASS)) {
+      onToggleFullKeyDisplay(metadataContainerEl);
+    }
   });
 }
 
@@ -901,6 +1200,24 @@ function renderAddPropertyButton(params: RenderAddPropertyButtonParams): void {
   });
 }
 
+function setFullKeyToggleButtonState(toggleButton: HTMLElement, isExpanded: boolean, isDisabled: boolean): void {
+  toggleButton.setAttribute('aria-label', isExpanded ? 'Collapse Full Key Names' : 'Expand Full Key Names');
+  setMainUiToggleDisabled(toggleButton, isDisabled);
+}
+
+function setMainUiToggleDisabled(toggleButton: HTMLElement, isDisabled: boolean): void {
+  toggleButton.classList.toggle(MAIN_UI_TOGGLE_DISABLED_CLASS, isDisabled);
+  toggleButton.setAttribute('aria-disabled', String(isDisabled));
+  toggleButton.setAttribute('tabindex', isDisabled ? '-1' : '0');
+}
+
+function setToggleButtonState(toggleButton: HTMLElement, isAllCollapsed: boolean, isDisabled: boolean): void {
+  toggleButton.setAttribute('aria-label', isAllCollapsed ? 'Expand All Nested Properties' : 'Collapse All Nested Properties');
+  toggleButton.empty();
+  setIcon(toggleButton, isAllCollapsed ? 'chevrons-up-down' : 'chevrons-down-up');
+  setMainUiToggleDisabled(toggleButton, isDisabled);
+}
+
 function sizeTopLevelKeyInputs(metadataContainerEl: HTMLElement): void {
   // Size the native key input of every top-level property to its content so the full-key-display
   // Toggle (`width: auto`) can expand it. Obsidian renders plain scalar properties itself, so unlike
@@ -915,11 +1232,9 @@ function sizeTopLevelKeyInputs(metadataContainerEl: HTMLElement): void {
 }
 
 function updateToggleButton(params: UpdateToggleButtonParams): void {
-  const { metadataContainerEl, toggleButton } = params;
+  const { isDisabled, metadataContainerEl, toggleButton } = params;
   const allCollapsibles = metadataContainerEl.querySelectorAll('.nested-properties-collapsible');
   const isAllCollapsed = allCollapsibles.length > 0 && [...allCollapsibles].every((el) => el.classList.contains('is-collapsed'));
 
-  toggleButton.setAttribute('aria-label', isAllCollapsed ? 'Expand all nested properties' : 'Collapse all nested properties');
-  toggleButton.empty();
-  setIcon(toggleButton, isAllCollapsed ? 'chevrons-up-down' : 'chevrons-down-up');
+  setToggleButtonState(toggleButton, isAllCollapsed, isDisabled);
 }

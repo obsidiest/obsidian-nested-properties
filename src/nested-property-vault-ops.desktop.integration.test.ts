@@ -34,7 +34,7 @@ describe('Nested property vault-wide operations', () => {
         const TO_PATH = 'npVaultOpsRename.maintainer';
         const FILE_A = `${FOLDER}/a.md`;
         const FILE_B = `${FOLDER}/b.md`;
-        const RENAME_COMMAND_ID = 'nested-properties:rename-nested-property-across-vault';
+        const RENAME_COMMAND_ID = 'nested-properties-advanced:rename-nested-property-across-vault';
 
         async function cleanup(): Promise<void> {
           for (const el of activeDocument.querySelectorAll<HTMLElement>(':scope .modal-container .modal-close-button')) {
@@ -146,7 +146,7 @@ describe('Nested property vault-wide operations', () => {
         const PATH = 'npVaultOpsDelete.channel';
         const FILE_A = `${FOLDER}/a.md`;
         const FILE_B = `${FOLDER}/b.md`;
-        const DELETE_COMMAND_ID = 'nested-properties:delete-nested-property-across-vault';
+        const DELETE_COMMAND_ID = 'nested-properties-advanced:delete-nested-property-across-vault';
 
         async function cleanup(): Promise<void> {
           for (const el of activeDocument.querySelectorAll<HTMLElement>(':scope .modal-container .modal-close-button')) {

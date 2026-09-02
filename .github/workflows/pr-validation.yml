@@ -1,0 +1,74 @@
+name: Validate pull requests
+
+# cspell:ignore vitest
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  desktop-property-visuals:
+    name: Property visuals in Obsidian
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      OBSIDIAN_INSTALLER_VERSION: public-latest
+      OBSIDIAN_VERSION: public-latest
+
+    steps:
+      - name: Check out the pull request
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build the plugin
+        run: npm run build
+
+      - name: Run trusted-input property visual tests
+        run: xvfb-run -a npx vitest run --config scripts/vitest-config.ts --project integration-tests:desktop src/property-field-visuals.desktop.integration.test.ts
+
+  validate:
+    name: Compile, test, and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out the pull request
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check
+        run: npm run build:compile
+
+      - name: Run unit tests
+        run: npm test
+
+      - name: Build deployable artifacts
+        run: npm run build
+
+      - name: Verify flat-layout deployment mirrors
+        shell: bash
+        run: |
+          test -s main.js
+          test -s styles.css
+          test -s dist/build/main.js
+          test -s dist/build/styles.css
+          cmp main.js dist/build/main.js
+          cmp styles.css dist/build/styles.css

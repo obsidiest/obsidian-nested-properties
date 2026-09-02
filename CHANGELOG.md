@@ -1,5 +1,51 @@
 # CHANGELOG
 
+## 2.0.0
+
+- fix: bind Live Preview metadata hit testing directly to every Properties editor and isolate Source hit testing to its owning CodeMirror view so full-row threading and exact breadcrumb scopes activate and deactivate reliably
+- fix: keep captured Live Preview property redo state through the metadata rerender after Ctrl+Z, preserve editor scroll in both editing modes, and confine breadcrumb scrolling to the popover itself
+
+- fix: bind property hover hit testing to the complete Markdown source-view and select Live Preview metadata rows solely by vertical position across the editor viewport
+- fix: keep key-only and icon-only hover breadcrumbs scoped to their exact targets while preserving the interactive popover handoff delay
+- fix: resolve Source root and flattened property rows through the EditorView that delivered the pointer event, excluding stale virtualized lines from other tabs or editor views
+- fix: replace the escaped Live Preview Properties history fallback with exact, non-history CodeMirror undo/redo transactions that neither move the selection nor intercept Source-mode history
+- breaking: rename the plugin, manifest ID, command namespace, release assets, and installation folder to Nested Properties Advanced (`nested-properties-advanced`)
+- fix: register a CodeMirror view plugin for exact virtualized-line mapping, viewport updates, and `scrollDOM` repaint scheduling instead of cursor-nearest Source-line inference
+- fix: attach row-based pointer listeners directly to every rendered metadata container so full-field, full-key, and icon activation do not depend on Obsidian's bubbled event target
+- fix: arm the Live Preview property transaction when Escape is pressed even when Obsidian retains focus in its property input, allowing Ctrl+Y to replay the exact Ctrl+Z edit
+- fix: bind Source guide overlays to the current editor viewport, hide stale geometry during scroll, and rerender from the newly visible CodeMirror lines
+- fix: clear Source-owned guides, threading, highlights, breadcrumbs, and cached Live Preview geometry whenever an editor changes mode
+- fix: observe pointer movement in the capture phase so Obsidian editor internals cannot suppress full-key/full-field breadcrumb and threading activation
+- fix: preserve the completed Live Preview property transaction at Ctrl+Z, then restore Ctrl+Y after Escape by replaying it only when both native redo paths remain unchanged
+- fix: use geometric property-row hit testing so threading and hover-breadcrumb scopes cover their configured full widths
+- fix: map Source-mode hover targets through editor coordinates so root, flattened, repeated, and nested fields resolve reliably
+- fix: suppress the native ancestor-tree focus background while Highlight Active Property Field Tree is disabled
+- feat: add default-enabled Live Preview, Source, and Reading-mode visibility switches for main-UI property threading and static tree indentation guides
+- feat: render static guides and active property threading alongside raw Source-mode frontmatter
+- feat: wrap complete hover-breadcrumb property names by default behind a searchable expansion switch
+- fix: widen the default hover breadcrumb and inset its root guide so long names wrap legibly and the top-level spine is not clipped
+- feat: add separate themed Style Settings controls for active-tree background and outline colors, with neutral gray and black defaults
+- fix: make nested object keys editable in Live Preview while keeping structural array indices read-only
+- fix: activate property threading across the full property key/value row, including Source-mode root and flattened fields
+- feat: add selectable full-field, full-key, and icon/expansion-toggle hover-breadcrumb activation scopes
+- fix: disambiguate repeated Source-mode YAML keys by their visible editor line so breadcrumbs retain the complete ancestry
+- fix: render enabled static guides and threading above hover-breadcrumb rows
+- feat: remember per-note Expand/Collapse All Nested Properties and full-key-name states across restarts
+- feat: add global and per-note controls for nested-property expansion and full key names, including disabled header-button states
+- feat: rename the full-key header action dynamically to Expand Full Key Names or Collapse Full Key Names
+- feat: add optional active property-tree highlighting with Style Settings controls
+- fix: render property visuals only after layout readiness and only for shown metadata editors, reusing unchanged tab renders and invalidating only the editor that changed
+- fix: build guide overlays off-DOM, prune collapsed descendants, cache computed Style Settings values, and batch expand/collapse-all redraws
+- fix: keep Style Settings precision controls dormant while their section is closed and remove the synchronous whole-workspace Style Settings parse during startup
+- fix: isolate property visuals and Style Settings observers from unrelated Live Preview DOM churn
+- fix: mirror fresh production `main.js` and `styles.css` artifacts to the repository root for flat-layout local deployment scripts
+- feat: add searchable settings for property hover breadcrumbs, static tree guides, and property-field threading
+- feat: add clickable, keyboard-navigable property ancestry breadcrumbs in Live Preview, Source, and Reading modes
+- feat: add main-UI and breadcrumb tree guides with active-path, all-branch, root-level, and cursor-activated threading modes
+- feat: add comprehensive Style Settings controls with synchronized precise numeric inputs and themed thread colors
+- test: cover property trees, source frontmatter parsing, breadcrumb navigation, guide geometry, settings defaults, and release configuration
+- build: attest every published release asset with GitHub artifact attestations
+
 ## 1.4.4
 
 - docs(readme): render the same in Obsidian's plugin page as on GitHub

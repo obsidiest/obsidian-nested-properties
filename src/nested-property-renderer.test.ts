@@ -19,7 +19,11 @@ import {
 
 import type { PluginSettingsComponent } from './plugin-settings-component.ts';
 
-import { NestedPropertyRendererComponent } from './nested-property-renderer.ts';
+import {
+  NestedPropertyRendererComponent,
+  renameObjectKey,
+  resolveGlobalToggleState
+} from './nested-property-renderer.ts';
 import { PluginSettings } from './plugin-settings.ts';
 
 interface MockClassList {
@@ -231,14 +235,6 @@ vi.mock('./type-change-modal.ts', () => ({
 // eslint-disable-next-line import-x/first, import-x/imports-first -- vi.mock must precede imports.
 import { FloatingScrollbarComponent } from './floating-scrollbar.ts';
 
-interface FakeContainer {
-  win: FakeWindow;
-}
-
-interface FakeLeaf {
-  getContainer(): FakeContainer;
-}
-
 interface FakeWindow {
   document: FakeWindowDocument;
 }
@@ -250,13 +246,29 @@ interface FakeWindowBody {
 
 interface FakeWindowDocument {
   body: FakeWindowBody;
+  querySelectorAll: MockFunction;
 }
 
 type GetTypeInfoFunction = (p: string, v: unknown) => TypeInfo;
 
+interface MetadataContainerFixture {
+  readonly collapsibles?: MockDomElement[];
+  readonly expansionButton?: MockDomElement | null;
+  readonly fullKeyButton?: MockDomElement | null;
+  readonly sourcePath?: string;
+}
+
 interface MockApp {
   metadataTypeManager: MockMetadataTypeManager;
   workspace: MockWorkspace;
+}
+
+interface MockLeaf {
+  getContainer(): MockLeafContainer;
+}
+
+interface MockLeafContainer {
+  readonly win: FakeWindow;
 }
 
 interface MockMetadataTypeManager {
@@ -275,10 +287,24 @@ interface MockWorkspace {
 }
 
 interface RendererTestAccess {
+  applyConfiguredGlobalExpansionState(): void;
+  applyConfiguredGlobalFullKeyNamesState(): void;
+  applyFullKeyNamesStateToNote(sourcePath: string, isExpanded: boolean, initiatingContainer?: HTMLElement): void;
   cleanups__: (() => unknown)[];
   expandedPaths: Set<string>;
+  expansionStateByNote: Map<string, boolean>;
+  findActiveMetadataContainer(): HTMLElement | undefined;
+  fullKeyNamesStateByNote: Map<string, boolean>;
+  getInitialExpansionState(sourcePath: string): boolean;
+  getInitialFullKeyNamesState(sourcePath: string): boolean;
+  getMetadataContainers(sourcePath?: string): HTMLElement[];
+  initializedExpansionPaths: Set<string>;
+  initializeExpansionPath(path: string, sourcePath: string): void;
   loaded__: boolean;
   pendingFocusKey: null | string;
+  refreshMainUiControls(): void;
+  setAllNestedPropertiesState(sourcePath: string, isExpanded: boolean, initiatingContainer?: HTMLElement): void;
+  setFullKeyNamesState(sourcePath: string, isExpanded: boolean): void;
   showNestedPropertyMenu(params: ShowNestedPropertyMenuTestParams): void;
 }
 
@@ -301,9 +327,27 @@ function createFakeWindow(): FakeWindow {
       body: {
         removeClass: vi.fn(),
         toggleClass: vi.fn()
-      }
+      },
+      querySelectorAll: vi.fn(() => [])
     }
   };
+}
+
+function createMetadataContainer(fixture: MetadataContainerFixture = {}): MockDomElement {
+  const collapsibles = fixture.collapsibles ?? [];
+  const expansionButton = fixture.expansionButton ?? null;
+  const fullKeyButton = fixture.fullKeyButton ?? null;
+  return createMockEl({
+    dataset: fixture.sourcePath === undefined ? {} : { nestedPropertiesSourcePath: fixture.sourcePath },
+    querySelector: vi.fn((selector: string) =>
+      selector === '.nested-properties-all-toggle'
+        ? expansionButton
+        : (selector === '.nested-properties-full-key-toggle'
+          ? fullKeyButton
+          : null)
+    ),
+    querySelectorAll: vi.fn((selector: string) => selector === '.nested-properties-collapsible' ? collapsibles : [])
+  });
 }
 
 function createMockEl(overrides?: Partial<MockDomElement>): MockDomElement {
@@ -347,6 +391,15 @@ function createMockEl(overrides?: Partial<MockDomElement>): MockDomElement {
     Object.assign(el, overrides);
   }
   return el;
+}
+
+function exposeMetadataContainers(...containers: MockDomElement[]): FakeWindow {
+  const win = createFakeWindow();
+  win.document.querySelectorAll.mockReturnValue(containers);
+  mockApp.workspace.iterateAllLeaves.mockImplementation((callback: (leaf: MockLeaf) => void) => {
+    callback({ getContainer: () => ({ win }) });
+  });
+  return win;
 }
 
 function testAccess(r: NestedPropertyRendererComponent): RendererTestAccess {
@@ -446,6 +499,7 @@ describe('NestedPropertyRenderer', () => {
     vi.stubGlobal('HTMLInputElement', hoisted.MockHTMLInputElementBase);
     vi.stubGlobal('activeDocument', {
       activeElement: null,
+      querySelector: vi.fn(() => null),
       querySelectorAll: vi.fn(() => [])
     });
     vi.stubGlobal('activeWindow', createFakeWindow());
@@ -544,6 +598,8 @@ describe('NestedPropertyRenderer', () => {
       loadRenderer();
 
       const mockRemoveEl = createMockEl();
+      const metadataContainer = createMetadataContainer({ sourcePath: 'cleanup.md' });
+      exposeMetadataContainers(metadataContainer);
       vi.spyOn(activeDocument, 'querySelectorAll').mockImplementation(() => asNodeList([mockRemoveEl]));
 
       for (const $function of testAccess(renderer).cleanups__) {
@@ -553,6 +609,7 @@ describe('NestedPropertyRenderer', () => {
       expect(mockApp.metadataTypeManager.registeredTypeWidgets['list']).toBeUndefined();
       expect(mockApp.metadataTypeManager.registeredTypeWidgets['object']).toBeUndefined();
       expect(mockRemoveEl.remove).toHaveBeenCalled();
+      expect(metadataContainer.classList.remove).toHaveBeenCalledWith('nested-properties-full-key-display');
     });
 
     it('should validate mixedListWidget correctly', () => {
@@ -606,77 +663,403 @@ describe('NestedPropertyRenderer', () => {
     });
   });
 
-  describe('toggleFullKeyDisplay', () => {
-    const FULL_KEY_DISPLAY_BODY_CLASS = 'nested-properties-full-key-display';
+  describe('main UI state helpers', () => {
+    it('should resolve mutually exclusive global expansion choices without treating both off as an action', () => {
+      expect(resolveGlobalToggleState(true, false)).toBe(true);
+      expect(resolveGlobalToggleState(false, true)).toBe(false);
+      expect(resolveGlobalToggleState(false, false)).toBeNull();
+      expect(resolveGlobalToggleState(true, true)).toBe(false);
+    });
 
-    function stubWindows(win: FakeWindow): void {
-      vi.stubGlobal('activeWindow', win);
-      mockApp.workspace.iterateAllLeaves = vi.fn((callback: (leaf: FakeLeaf) => void) => {
-        callback({ getContainer: () => ({ win }) });
+    it('should rename an object key in place order while preserving its value', () => {
+      expect(renameObjectKey({ after: 3, before: 1, old: { nested: true } }, 'old', 'renamed')).toEqual({
+        after: 3,
+        before: 1,
+        renamed: { nested: true }
       });
-    }
-
-    it('should apply the disabled state to the main window on load', () => {
-      const win = createFakeWindow();
-      stubWindows(win);
-
-      loadRenderer();
-
-      expect(win.document.body.toggleClass).toHaveBeenCalledWith(FULL_KEY_DISPLAY_BODY_CLASS, false);
+      expect(Object.keys(renameObjectKey({ after: 3, before: 1, old: 2 }, 'old', 'renamed') ?? {})).toEqual(['after', 'before', 'renamed']);
     });
 
-    it('should enable full key display across all windows when toggled on', () => {
-      const win = createFakeWindow();
-      stubWindows(win);
-      loadRenderer();
-      win.document.body.toggleClass.mockClear();
+    it('should reject blank, duplicate, unchanged, and missing object-key renames', () => {
+      const value = { existing: 1, old: 2 };
+      expect(renameObjectKey(value, 'old', ' ')).toBeNull();
+      expect(renameObjectKey(value, 'old', 'existing')).toBeNull();
+      expect(renameObjectKey(value, 'old', 'old')).toBeNull();
+      expect(renameObjectKey(value, 'missing', 'new')).toBeNull();
+    });
 
+    it('should resolve remembered, session, global, and disabled expansion defaults', () => {
+      const access = testAccess(renderer);
+      mockPluginSettings.allNestedPropertiesExpansionStateByNote['remembered.md'] = false;
+      expect(access.getInitialExpansionState('remembered.md')).toBe(false);
+
+      access.expansionStateByNote.set('session.md', false);
+      mockPluginSettings.allNestedPropertiesExpansionStateByNote['session.md'] = true;
+      expect(access.getInitialExpansionState('session.md')).toBe(false);
+
+      mockPluginSettings.isRememberLastUsedMainUiToggleStatesEnabled = false;
+      expect(access.getInitialExpansionState('global.md')).toBe(true);
+      mockPluginSettings.isRememberLastUsedMainUiToggleStatesEnabled = true;
+      mockPluginSettings.isRememberAllNestedPropertiesExpansionToggleStateEnabled = false;
+      expect(access.getInitialExpansionState('subordinate-off.md')).toBe(true);
+
+      mockPluginSettings.isRememberAllNestedPropertiesExpansionToggleStateEnabled = true;
+      mockPluginSettings.isGlobalExpandAllNestedPropertiesEnabled = false;
+      expect(access.getInitialExpansionState('global-no-action.md')).toBe(false);
+      mockPluginSettings.isGlobalToggleAllNestedPropertiesEnabled = false;
+      expect(access.getInitialExpansionState('global-disabled.md')).toBe(false);
+    });
+
+    it('should resolve remembered, session, global, and disabled full-key defaults', () => {
+      const access = testAccess(renderer);
+      mockPluginSettings.fullKeyNamesExpansionStateByNote['remembered.md'] = false;
+      expect(access.getInitialFullKeyNamesState('remembered.md')).toBe(false);
+
+      access.fullKeyNamesStateByNote.set('session.md', false);
+      mockPluginSettings.fullKeyNamesExpansionStateByNote['session.md'] = true;
+      expect(access.getInitialFullKeyNamesState('session.md')).toBe(false);
+
+      mockPluginSettings.isRememberLastUsedMainUiToggleStatesEnabled = false;
+      expect(access.getInitialFullKeyNamesState('global.md')).toBe(true);
+      mockPluginSettings.isRememberLastUsedMainUiToggleStatesEnabled = true;
+      mockPluginSettings.isRememberFullKeyNamesExpansionToggleStateEnabled = false;
+      expect(access.getInitialFullKeyNamesState('subordinate-off.md')).toBe(true);
+
+      mockPluginSettings.isRememberFullKeyNamesExpansionToggleStateEnabled = true;
+      mockPluginSettings.isGlobalExpandFullKeyNamesEnabled = false;
+      expect(access.getInitialFullKeyNamesState('global-no-action.md')).toBe(false);
+      mockPluginSettings.isGlobalToggleFullKeyNamesEnabled = false;
+      expect(access.getInitialFullKeyNamesState('global-disabled.md')).toBe(false);
+    });
+
+    it('should initialize each expansion path once from its note state', () => {
+      const access = testAccess(renderer);
+      access.expandedPaths.add('test.md:collapsed');
+      mockPluginSettings.isGlobalExpandAllNestedPropertiesEnabled = false;
+      mockPluginSettings.isGlobalCollapseAllNestedPropertiesEnabled = true;
+
+      access.initializeExpansionPath('test.md:collapsed', 'test.md');
+      expect(access.expandedPaths.has('test.md:collapsed')).toBe(false);
+
+      mockPluginSettings.isGlobalExpandAllNestedPropertiesEnabled = true;
+      mockPluginSettings.isGlobalCollapseAllNestedPropertiesEnabled = false;
+      access.initializeExpansionPath('test.md:collapsed', 'test.md');
+      expect(access.expandedPaths.has('test.md:collapsed')).toBe(false);
+    });
+
+    it('should enumerate metadata containers across windows and filter by note', () => {
+      const first = createMetadataContainer({ sourcePath: 'first.md' });
+      const second = createMetadataContainer({ sourcePath: 'second.md' });
+      const unknown = createMetadataContainer();
+      exposeMetadataContainers(first, second, unknown);
+      const access = testAccess(renderer);
+
+      expect(access.getMetadataContainers()).toEqual([first, second, unknown]);
+      expect(access.getMetadataContainers('second.md')).toEqual([second]);
+    });
+
+    it('should find the active note metadata container before document fallbacks', () => {
+      const activeContainer = createMetadataContainer({ sourcePath: 'active.md' });
+      const activeElement = createMockEl({ closest: vi.fn(() => activeContainer) });
+      const querySelector = vi.fn();
+      vi.stubGlobal('activeDocument', { activeElement, querySelector, querySelectorAll: vi.fn(() => []) });
+
+      expect(testAccess(renderer).findActiveMetadataContainer()).toBe(activeContainer);
+      expect(querySelector).not.toHaveBeenCalled();
+    });
+
+    it('should fall back from the active leaf to any metadata container', () => {
+      const fallbackContainer = createMetadataContainer({ sourcePath: 'fallback.md' });
+      const activeElement = createMockEl({ closest: vi.fn(() => null) });
+      const querySelector = vi.fn((selector: string) => selector === ':scope .metadata-container' ? fallbackContainer : null);
+      vi.stubGlobal('activeDocument', { activeElement, querySelector, querySelectorAll: vi.fn(() => []) });
+
+      expect(testAccess(renderer).findActiveMetadataContainer()).toBe(fallbackContainer);
+      expect(querySelector).toHaveBeenCalledWith(':scope .workspace-leaf.mod-active .metadata-container');
+      expect(querySelector).toHaveBeenCalledWith(':scope .metadata-container');
+    });
+  });
+
+  describe('main UI state actions', () => {
+    it('should toggle and remember full key names for every view of the active note', () => {
+      const fullKeyButton = createMockEl();
+      const first = createMetadataContainer({ fullKeyButton, sourcePath: 'test.md' });
+      const second = createMetadataContainer({ fullKeyButton: createMockEl(), sourcePath: 'test.md' });
+      exposeMetadataContainers(first, second);
+      first.classList.contains.mockReturnValueOnce(false).mockReturnValueOnce(true);
+
+      renderer.toggleFullKeyDisplay(castTo<HTMLElement>(first));
+      expect(first.classList.toggle).toHaveBeenCalledWith('nested-properties-full-key-display', true);
+      expect(second.classList.toggle).toHaveBeenCalledWith('nested-properties-full-key-display', true);
+      expect(fullKeyButton.setAttribute).toHaveBeenCalledWith('aria-label', 'Collapse Full Key Names');
+      expect(mockPluginSettings.fullKeyNamesExpansionStateByNote['test.md']).toBe(true);
+
+      renderer.toggleFullKeyDisplay(castTo<HTMLElement>(first));
+      expect(first.classList.toggle).toHaveBeenCalledWith('nested-properties-full-key-display', false);
+      expect(fullKeyButton.setAttribute).toHaveBeenCalledWith('aria-label', 'Expand Full Key Names');
+      expect(mockPluginSettings.fullKeyNamesExpansionStateByNote['test.md']).toBe(false);
+    });
+
+    it('should ignore unavailable, untracked, and disabled full-key toggles', () => {
       renderer.toggleFullKeyDisplay();
 
-      expect(win.document.body.toggleClass).toHaveBeenCalledWith(FULL_KEY_DISPLAY_BODY_CLASS, true);
+      const untracked = createMetadataContainer();
+      renderer.toggleFullKeyDisplay(castTo<HTMLElement>(untracked));
+      mockPluginSettings.isPerNoteToggleFullKeyNamesEnabled = false;
+      const disabled = createMetadataContainer({ sourcePath: 'disabled.md' });
+      renderer.toggleFullKeyDisplay(castTo<HTMLElement>(disabled));
+
+      expect(untracked.classList.toggle).not.toHaveBeenCalled();
+      expect(disabled.classList.toggle).not.toHaveBeenCalled();
     });
 
-    it('should disable full key display when toggled twice', () => {
-      const win = createFakeWindow();
-      stubWindows(win);
-      loadRenderer();
+    it('should apply and remember global expansion actions in one pass', () => {
+      const expansionButton = createMockEl();
+      const collapsible = createMockEl({ dataset: { path: 'first.md:tree' } });
+      const first = createMetadataContainer({ collapsibles: [collapsible], expansionButton, sourcePath: 'first.md' });
+      const noSource = createMetadataContainer({ collapsibles: [createMockEl()] });
+      exposeMetadataContainers(first, noSource);
+      testAccess(renderer).expandedPaths.add('closed.md:stale');
+      testAccess(renderer).initializedExpansionPaths.add('closed.md:stale');
 
-      renderer.toggleFullKeyDisplay();
-      win.document.body.toggleClass.mockClear();
-      renderer.toggleFullKeyDisplay();
+      renderer.refreshSettings('isGlobalExpandAllNestedPropertiesEnabled', true);
+      expect(collapsible.classList.remove).toHaveBeenCalledWith('is-collapsed');
+      expect(expansionButton.setAttribute).toHaveBeenCalledWith('aria-label', 'Collapse All Nested Properties');
+      expect(mockPluginSettings.allNestedPropertiesExpansionStateByNote).toEqual({ 'first.md': true });
+      expect(testAccess(renderer).expandedPaths.has('closed.md:stale')).toBe(false);
+      expect(testAccess(renderer).initializedExpansionPaths.size).toBe(0);
 
-      expect(win.document.body.toggleClass).toHaveBeenCalledWith(FULL_KEY_DISPLAY_BODY_CLASS, false);
+      mockPluginSettings.isGlobalExpandAllNestedPropertiesEnabled = false;
+      mockPluginSettings.isGlobalCollapseAllNestedPropertiesEnabled = true;
+      renderer.refreshSettings('isGlobalCollapseAllNestedPropertiesEnabled', true);
+      expect(collapsible.classList.add).toHaveBeenCalledWith('is-collapsed');
+      expect(mockPluginSettings.allNestedPropertiesExpansionStateByNote).toEqual({ 'first.md': false });
     });
 
-    it('should remove the full key display class from all windows on unload', () => {
-      const win = createFakeWindow();
-      stubWindows(win);
-      loadRenderer();
+    it('should apply and remember global full-key actions in one pass', () => {
+      const fullKeyButton = createMockEl();
+      const first = createMetadataContainer({ fullKeyButton, sourcePath: 'first.md' });
+      const second = createMetadataContainer({ sourcePath: 'second.md' });
+      const noSource = createMetadataContainer();
+      exposeMetadataContainers(first, second, noSource);
 
-      renderer.unload();
+      renderer.refreshSettings('isGlobalExpandFullKeyNamesEnabled', true);
+      expect(first.classList.toggle).toHaveBeenCalledWith('nested-properties-full-key-display', true);
+      expect(fullKeyButton.setAttribute).toHaveBeenCalledWith('aria-label', 'Collapse Full Key Names');
+      expect(mockPluginSettings.fullKeyNamesExpansionStateByNote).toEqual({ 'first.md': true, 'second.md': true });
 
-      expect(win.document.body.removeClass).toHaveBeenCalledWith(FULL_KEY_DISPLAY_BODY_CLASS);
+      mockPluginSettings.isGlobalExpandFullKeyNamesEnabled = false;
+      mockPluginSettings.isGlobalCollapseFullKeyNamesEnabled = true;
+      renderer.refreshSettings('isGlobalCollapseFullKeyNamesEnabled', true);
+      expect(first.classList.toggle).toHaveBeenCalledWith('nested-properties-full-key-display', false);
+      expect(fullKeyButton.setAttribute).toHaveBeenCalledWith('aria-label', 'Expand Full Key Names');
+      expect(mockPluginSettings.fullKeyNamesExpansionStateByNote).toEqual({ 'first.md': false, 'second.md': false });
     });
 
-    it('should initialize the enabled state from persisted settings on load', () => {
-      const win = createFakeWindow();
-      stubWindows(win);
-      mockPluginSettings.isFullKeyDisplayEnabled = true;
+    it('should synchronize full-key state without an initiating container', () => {
+      const container = createMetadataContainer({ sourcePath: 'test.md' });
+      exposeMetadataContainers(container);
 
-      loadRenderer();
+      testAccess(renderer).applyFullKeyNamesStateToNote('test.md', true);
 
-      expect(win.document.body.toggleClass).toHaveBeenCalledWith(FULL_KEY_DISPLAY_BODY_CLASS, true);
+      expect(container.classList.toggle).toHaveBeenCalledWith('nested-properties-full-key-display', true);
     });
 
-    it('should persist the state when toggled', () => {
-      const win = createFakeWindow();
-      stubWindows(win);
+    it('should not run disabled or actionless global controls', () => {
+      const access = testAccess(renderer);
+      const editAndSave = vi.mocked(mockPluginSettingsComponent.editAndSave);
+      mockPluginSettings.isGlobalToggleAllNestedPropertiesEnabled = false;
+      access.applyConfiguredGlobalExpansionState();
+      mockPluginSettings.isGlobalToggleAllNestedPropertiesEnabled = true;
+      mockPluginSettings.isGlobalExpandAllNestedPropertiesEnabled = false;
+      mockPluginSettings.isGlobalCollapseAllNestedPropertiesEnabled = false;
+      access.applyConfiguredGlobalExpansionState();
+
+      mockPluginSettings.isGlobalToggleFullKeyNamesEnabled = false;
+      access.applyConfiguredGlobalFullKeyNamesState();
+      mockPluginSettings.isGlobalToggleFullKeyNamesEnabled = true;
+      mockPluginSettings.isGlobalExpandFullKeyNamesEnabled = false;
+      mockPluginSettings.isGlobalCollapseFullKeyNamesEnabled = false;
+      access.applyConfiguredGlobalFullKeyNamesState();
+
+      expect(editAndSave).not.toHaveBeenCalled();
+    });
+
+    it('should dispatch every global settings trigger only when enabled', () => {
+      mockPluginSettings.isGlobalToggleAllNestedPropertiesEnabled = false;
+      mockPluginSettings.isGlobalToggleFullKeyNamesEnabled = false;
+      for (
+        const key of [
+          'isGlobalToggleAllNestedPropertiesEnabled',
+          'isGlobalExpandAllNestedPropertiesEnabled',
+          'isGlobalCollapseAllNestedPropertiesEnabled',
+          'isGlobalToggleFullKeyNamesEnabled',
+          'isGlobalExpandFullKeyNamesEnabled',
+          'isGlobalCollapseFullKeyNamesEnabled'
+        ] as const
+      ) {
+        renderer.refreshSettings(key, true);
+      }
+      renderer.refreshSettings('isPerNoteToggleAllNestedPropertiesEnabled', true);
+      renderer.refreshSettings('isGlobalExpandAllNestedPropertiesEnabled', false);
+      renderer.refreshSettings();
+    });
+
+    it('should honor both remember switches for global and per-note writes', () => {
+      const access = testAccess(renderer);
+      const editAndSave = vi.mocked(mockPluginSettingsComponent.editAndSave);
+      mockPluginSettings.isRememberLastUsedMainUiToggleStatesEnabled = false;
+      access.applyConfiguredGlobalExpansionState();
+      access.applyConfiguredGlobalFullKeyNamesState();
+      access.setAllNestedPropertiesState('master-off.md', false);
+      access.setFullKeyNamesState('master-off.md', false);
+      expect(editAndSave).not.toHaveBeenCalled();
+
+      mockPluginSettings.isRememberLastUsedMainUiToggleStatesEnabled = true;
+      mockPluginSettings.isRememberAllNestedPropertiesExpansionToggleStateEnabled = false;
+      mockPluginSettings.isRememberFullKeyNamesExpansionToggleStateEnabled = false;
+      access.applyConfiguredGlobalExpansionState();
+      access.applyConfiguredGlobalFullKeyNamesState();
+      access.setAllNestedPropertiesState('subordinate-off.md', false);
+      access.setFullKeyNamesState('subordinate-off.md', false);
+      expect(editAndSave).not.toHaveBeenCalled();
+    });
+
+    it('should synchronize accessible and inaccessible header controls', () => {
+      const expansionButton = createMockEl();
+      const fullKeyButton = createMockEl();
+      const collapsible = createMockEl();
+      collapsible.classList.contains.mockReturnValue(false);
+      const first = createMetadataContainer({ collapsibles: [collapsible], expansionButton, fullKeyButton, sourcePath: 'first.md' });
+      const withoutButtons = createMetadataContainer({ sourcePath: 'second.md' });
+      const withoutSource = createMetadataContainer({ expansionButton: createMockEl() });
+      exposeMetadataContainers(first, withoutButtons, withoutSource);
+      mockPluginSettings.isPerNoteToggleAllNestedPropertiesEnabled = false;
+      mockPluginSettings.isPerNoteToggleFullKeyNamesEnabled = false;
+
+      testAccess(renderer).refreshMainUiControls();
+
+      expect(first.classList.toggle).toHaveBeenCalledWith('nested-properties-full-key-display', true);
+      expect(expansionButton.classList.toggle).toHaveBeenCalledWith('nested-properties-main-ui-toggle-disabled', true);
+      expect(fullKeyButton.classList.toggle).toHaveBeenCalledWith('nested-properties-main-ui-toggle-disabled', true);
+      expect(expansionButton.setAttribute).toHaveBeenCalledWith('tabindex', '-1');
+      expect(fullKeyButton.setAttribute).toHaveBeenCalledWith('aria-label', 'Collapse Full Key Names');
+    });
+  });
+
+  describe('nested property key editing', () => {
+    it('should make object keys editable and commit an order-preserving rename on blur', () => {
       loadRenderer();
+      const propertyEl = document.body.createDiv({ cls: 'metadata-property' });
+      const valueEl = propertyEl.createDiv({ cls: 'metadata-property-value' });
+      const onChange = vi.fn();
 
-      renderer.toggleFullKeyDisplay();
+      renderWidget('object', castTo<MockDomElement>(valueEl), { after: 3, before: 1, old: 2 }, createMockContext({ onChange }));
+      const input = [...valueEl.querySelectorAll<HTMLInputElement>('.metadata-property-key-input')].find((candidate) => candidate.value === 'old');
+      if (input === undefined) {
+        throw new Error('Expected an editable nested object key input');
+      }
+      expect(input.readOnly).toBe(false);
+      expect(input.tabIndex).not.toBe(-1);
 
-      expect(mockPluginSettingsComponent.editAndSave).toHaveBeenCalledTimes(1);
-      expect(mockPluginSettings.isFullKeyDisplayEnabled).toBe(true);
+      input.value = 'renamed';
+      input.dispatchEvent(new FocusEvent('blur'));
+      expect(onChange).toHaveBeenCalledWith({ after: 3, before: 1, renamed: 2 });
+      propertyEl.remove();
+    });
+
+    it('should keep structural array indices read-only', () => {
+      loadRenderer();
+      const propertyEl = document.body.createDiv({ cls: 'metadata-property' });
+      const valueEl = propertyEl.createDiv({ cls: 'metadata-property-value' });
+
+      renderWidget('list', castTo<MockDomElement>(valueEl), [{ child: true }], createMockContext());
+      const indexInput = [...valueEl.querySelectorAll<HTMLInputElement>('.metadata-property-key-input')].find((candidate) => candidate.value === '0');
+      if (indexInput === undefined) {
+        throw new Error('Expected the structural array index input');
+      }
+      expect(indexInput.readOnly).toBe(true);
+      expect(indexInput.tabIndex).toBe(-1);
+      propertyEl.remove();
+    });
+
+    it('should restore unchanged, blank, and duplicate object-key edits', () => {
+      loadRenderer();
+      const propertyEl = document.body.createDiv({ cls: 'metadata-property' });
+      const valueEl = propertyEl.createDiv({ cls: 'metadata-property-value' });
+      const onChange = vi.fn();
+
+      renderWidget('object', castTo<MockDomElement>(valueEl), { existing: 1, old: 2 }, createMockContext({ onChange }));
+      const input = [...valueEl.querySelectorAll<HTMLInputElement>('.metadata-property-key-input')].find((candidate) => candidate.value === 'old');
+      if (input === undefined) {
+        throw new Error('Expected an editable nested object key input');
+      }
+
+      for (const rejectedValue of ['old', ' ', 'existing']) {
+        input.value = rejectedValue;
+        input.dispatchEvent(new FocusEvent('blur'));
+        expect(input.value).toBe('old');
+      }
+      expect(onChange).not.toHaveBeenCalled();
+      propertyEl.remove();
+    });
+
+    it('should resize while typing and restore the key on Escape', () => {
+      loadRenderer();
+      const propertyEl = document.body.createDiv({ cls: 'metadata-property' });
+      const valueEl = propertyEl.createDiv({ cls: 'metadata-property-value' });
+      const onChange = vi.fn();
+
+      renderWidget('object', castTo<MockDomElement>(valueEl), { old: 2 }, createMockContext({ onChange }));
+      const input = valueEl.querySelector<HTMLInputElement>('.metadata-property-key-input');
+      if (input === null) {
+        throw new Error('Expected an editable nested object key input');
+      }
+
+      input.value = 'a-much-longer-key';
+      input.dispatchEvent(new Event('input'));
+      expect(input.size).toBe('a-much-longer-key'.length);
+      input.focus();
+      input.dispatchEvent(new KeyboardEvent('keydown', { cancelable: true, key: 'Escape' }));
+      expect(input.value).toBe('old');
+      expect(input.size).toBe(3);
+      expect(onChange).not.toHaveBeenCalled();
+      propertyEl.remove();
+    });
+
+    it('should commit a key edit on Enter', () => {
+      loadRenderer();
+      const propertyEl = document.body.createDiv({ cls: 'metadata-property' });
+      const valueEl = propertyEl.createDiv({ cls: 'metadata-property-value' });
+      const onChange = vi.fn();
+
+      renderWidget('object', castTo<MockDomElement>(valueEl), { old: 2 }, createMockContext({ onChange }));
+      const input = valueEl.querySelector<HTMLInputElement>('.metadata-property-key-input');
+      if (input === null) {
+        throw new Error('Expected an editable nested object key input');
+      }
+
+      input.focus();
+      input.value = 'renamed';
+      input.dispatchEvent(new KeyboardEvent('keydown', { cancelable: true, key: 'Enter' }));
+      expect(onChange).toHaveBeenCalledWith({ renamed: 2 });
+      propertyEl.remove();
+    });
+
+    it('should allow non-commit navigation keys', () => {
+      loadRenderer();
+      const propertyEl = document.body.createDiv({ cls: 'metadata-property' });
+      const valueEl = propertyEl.createDiv({ cls: 'metadata-property-value' });
+      const onChange = vi.fn();
+
+      renderWidget('object', castTo<MockDomElement>(valueEl), { old: 2 }, createMockContext({ onChange }));
+      const input = valueEl.querySelector<HTMLInputElement>('.metadata-property-key-input');
+      if (input === null) {
+        throw new Error('Expected an editable nested object key input');
+      }
+      input.dispatchEvent(new KeyboardEvent('keydown', { cancelable: true, key: 'ArrowLeft' }));
+      expect(onChange).not.toHaveBeenCalled();
+      propertyEl.remove();
     });
   });
 
@@ -866,7 +1249,7 @@ describe('NestedPropertyRenderer', () => {
       expect(result.type).toBe('object');
     });
 
-    it('should set up collapsible UI with collapse button', () => {
+    it('should set up an initially expanded collapsible UI with a collapse button', () => {
       loadRenderer();
 
       const collapseButton = createMockEl();
@@ -892,7 +1275,37 @@ describe('NestedPropertyRenderer', () => {
       renderWidget('list', el, ['a'], context);
 
       expect(propertyEl.classList.add).toHaveBeenCalledWith('nested-properties-collapsible');
+      expect(propertyEl.classList.add).not.toHaveBeenCalledWith('is-collapsed');
+    });
+
+    it('should restore a remembered collapsed root property', () => {
+      loadRenderer();
+      mockPluginSettings.allNestedPropertiesExpansionStateByNote['test.md'] = false;
+      const propertyEl = createMockEl({ querySelector: vi.fn(() => null) });
+      const el = createMockEl({ closest: vi.fn(() => propertyEl) });
+
+      renderWidget('list', el, ['a'], createMockContext());
+
       expect(propertyEl.classList.add).toHaveBeenCalledWith('is-collapsed');
+    });
+
+    it('should render nested complex fields in both expanded and collapsed states', () => {
+      loadRenderer();
+      const expandedProperty = document.body.createDiv({ cls: 'metadata-property' });
+      const expandedValue = expandedProperty.createDiv({ cls: 'metadata-property-value' });
+      renderWidget('object', castTo<MockDomElement>(expandedValue), { nested: { child: 1 } }, createMockContext({ sourcePath: 'expanded.md' }));
+      const expandedNested = expandedValue.querySelector<HTMLElement>('[data-path="expanded.md:testKey.nested"]');
+      expect(expandedNested?.classList.contains('is-collapsed')).toBe(false);
+
+      mockPluginSettings.allNestedPropertiesExpansionStateByNote['collapsed.md'] = false;
+      const collapsedProperty = document.body.createDiv({ cls: 'metadata-property' });
+      const collapsedValue = collapsedProperty.createDiv({ cls: 'metadata-property-value' });
+      renderWidget('object', castTo<MockDomElement>(collapsedValue), { nested: { child: 1 } }, createMockContext({ sourcePath: 'collapsed.md' }));
+      const collapsedNested = collapsedValue.querySelector<HTMLElement>('[data-path="collapsed.md:testKey.nested"]');
+      expect(collapsedNested?.classList.contains('is-collapsed')).toBe(true);
+
+      expandedProperty.remove();
+      collapsedProperty.remove();
     });
 
     it('should size the native key input to its value length', () => {
@@ -2273,6 +2686,45 @@ describe('NestedPropertyRenderer', () => {
       handler({ preventDefault: vi.fn(), stopPropagation: vi.fn() });
 
       expect(toggleFullKeyDisplaySpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('should leave disabled header toggles visible but inaccessible', () => {
+      loadRenderer();
+      mockPluginSettings.isPerNoteToggleAllNestedPropertiesEnabled = false;
+      mockPluginSettings.isPerNoteToggleFullKeyNamesEnabled = false;
+      const toggleFullKeyDisplaySpy = vi.spyOn(renderer, 'toggleFullKeyDisplay');
+
+      const expansionButton = createMockEl();
+      const fullKeyButton = createMockEl();
+      expansionButton.classList.contains.mockReturnValue(true);
+      fullKeyButton.classList.contains.mockReturnValue(true);
+      const headingEl = createMockEl();
+      const actionsEl = createMockEl();
+      actionsEl.createDiv.mockReturnValueOnce(expansionButton).mockReturnValueOnce(fullKeyButton);
+      const collapsibleEl = createMockEl();
+      const metaContainer = createMockEl({
+        createDiv: vi.fn(() => actionsEl),
+        querySelector: vi.fn((selector: string) =>
+          selector === '.nested-properties-collapsible'
+            ? collapsibleEl
+            : (selector === '.metadata-properties-heading'
+              ? headingEl
+              : null)
+        ),
+        querySelectorAll: vi.fn(() => [collapsibleEl])
+      });
+      const containerEl = createMockEl({ closest: vi.fn(() => metaContainer) });
+      const el = createMockEl();
+      el.createDiv.mockReturnValue(containerEl);
+
+      renderWidget('list', el, ['a'], createMockContext());
+      vi.runAllTimers();
+      findEventHandler(expansionButton, 'click')({ preventDefault: vi.fn(), stopPropagation: vi.fn() });
+      findEventHandler(fullKeyButton, 'click')({ preventDefault: vi.fn(), stopPropagation: vi.fn() });
+
+      expect(expansionButton.setAttribute).toHaveBeenCalledWith('aria-disabled', 'true');
+      expect(fullKeyButton.setAttribute).toHaveBeenCalledWith('tabindex', '-1');
+      expect(toggleFullKeyDisplaySpy).not.toHaveBeenCalled();
     });
 
     it('should handle collapse all when not all collapsed', () => {

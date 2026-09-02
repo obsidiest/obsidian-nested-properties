@@ -18,6 +18,14 @@ import { NestedPropertyRendererComponent } from './nested-property-renderer.ts';
 import { NestedPropertyVaultOpsComponent } from './nested-property-vault-ops-component.ts';
 import { NestedPropertySearchPatchComponent } from './patches/nested-property-search-patch-component.ts';
 import { Plugin } from './plugin.ts';
+import { PropertyFieldVisualsComponent } from './property-field-visuals.ts';
+
+const lifecycleMocks = vi.hoisted(() => ({
+  documents: [] as Document[],
+  observeDocument: vi.fn(),
+  start: vi.fn(),
+  stop: vi.fn()
+}));
 
 // The real `PluginBase.onload()` loads dev-utils' own notice/context/debug components, which read a
 // Shared-state bag off the app via `getObsidianDevUtilsState`. The strict App mock has no such bag, so
@@ -27,6 +35,15 @@ vi.mock('obsidian-dev-utils/obsidian/app', async (importOriginal) => ({
   getObsidianDevUtilsState: vi.fn((_app: unknown, _key: string, defaultValue: unknown) => ({ value: defaultValue }))
 }));
 
+vi.mock('obsidian-dev-utils/obsidian/workspace', async (importOriginal) => ({
+  ...await importOriginal<typeof import('obsidian-dev-utils/obsidian/workspace')>(),
+  getAllDomWindows: vi.fn(() => lifecycleMocks.documents.map((document) => ({ document })))
+}));
+
+interface AppWithPlugins {
+  plugins: unknown;
+}
+
 // `NestedPropertyRendererComponent` is added via `addChild`, which eager-loads it, so its stub must be
 // Loadable — it returns a real `Component`. The instance that flows through `addChild` is the stub's
 // Return value (`mock.results[0].value`), not the discarded `this` (`mock.instances[0]`).
@@ -35,12 +52,28 @@ interface ObsidianComponentModule {
 }
 
 interface RendererWithToggle {
+  refreshSettings: ReturnType<typeof vi.fn>;
   toggleFullKeyDisplay: ReturnType<typeof vi.fn>;
+}
+
+interface SettingTabWithCallback {
+  onSettingsChanged(): void;
 }
 
 interface VaultOpsWithCommands {
   deleteNestedPropertyAcrossVault: ReturnType<typeof vi.fn>;
   renameNestedPropertyAcrossVault: ReturnType<typeof vi.fn>;
+}
+
+interface VisualsWithRefresh {
+  createEditorExtension: ReturnType<typeof vi.fn>;
+  refresh: ReturnType<typeof vi.fn>;
+}
+
+type WindowOpenCallback = (_workspaceWindow: unknown, openedWindow: WindowWithDocument) => void;
+
+interface WindowWithDocument {
+  document: Document;
 }
 
 async function loadableComponentStub(): Promise<ReturnType<typeof vi.fn>> {
@@ -52,13 +85,38 @@ async function loadableComponentStub(): Promise<ReturnType<typeof vi.fn>> {
   // eslint-disable-next-line prefer-arrow-callback -- See above; an arrow cannot be used here.
   return vi.fn(function componentStub() {
     const component = new Component();
-    Object.assign(component, { toggleFullKeyDisplay: vi.fn() });
+    Object.assign(component, { refreshSettings: vi.fn(), toggleFullKeyDisplay: vi.fn() });
     return component;
   });
 }
 
 vi.mock('./nested-property-renderer.ts', async () => ({
   NestedPropertyRendererComponent: await loadableComponentStub()
+}));
+
+async function loadableVisualsStub(): Promise<ReturnType<typeof vi.fn>> {
+  const { Component } = await vi.importActual<ObsidianComponentModule>('obsidian');
+  // eslint-disable-next-line prefer-arrow-callback -- A non-arrow function so it is constructable via `new`.
+  return vi.fn(function propertyFieldVisualsStub() {
+    const component = new Component();
+    Object.assign(component, { createEditorExtension: vi.fn(() => []), refresh: vi.fn() });
+    return component;
+  });
+}
+
+vi.mock('./property-field-visuals.ts', async () => ({
+  PropertyFieldVisualsComponent: await loadableVisualsStub()
+}));
+
+vi.mock('./style-settings-precision.ts', () => ({
+  // eslint-disable-next-line prefer-arrow-callback -- A non-arrow function so it is constructable via `new`.
+  StyleSettingsPrecisionControls: vi.fn(function styleSettingsPrecisionControlsStub() {
+    return {
+      observeDocument: lifecycleMocks.observeDocument,
+      start: lifecycleMocks.start,
+      stop: lifecycleMocks.stop
+    };
+  })
 }));
 
 // Mirrors `loadableComponentStub` but exposes the two vault-wide command methods as async spies so the
@@ -111,13 +169,14 @@ const MockNestedPropertyRendererComponent = vi.mocked(NestedPropertyRendererComp
 const MockNestedPropertyVaultOpsComponent = vi.mocked(NestedPropertyVaultOpsComponent);
 const MockNestedPropertySearchPatchComponent = vi.mocked(NestedPropertySearchPatchComponent);
 const MockOpenDemoVaultCommandHandler = vi.mocked(OpenDemoVaultCommandHandler);
+const MockPropertyFieldVisualsComponent = vi.mocked(PropertyFieldVisualsComponent);
 
 const manifest: PluginManifest = {
   author: 'test',
   description: 'test',
-  id: 'nested-properties',
+  id: 'nested-properties-advanced',
   minAppVersion: '1.0.0',
-  name: 'Nested Properties',
+  name: 'Nested Properties Advanced',
   version: '1.0.0'
 };
 
@@ -131,7 +190,9 @@ function instanceOf(mock: ReturnType<typeof vi.fn>): unknown {
 describe('Plugin', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    lifecycleMocks.documents.splice(0, lifecycleMocks.documents.length, castTo<Document>({ id: 'main-document' }));
     const appMock = App.createConfigured__();
+    castTo<AppWithPlugins>(appMock).plugins = { getPlugin: vi.fn(() => null) };
     appMock.workspace.onLayoutReady = vi.fn((callback: () => void) => {
       callback();
     });
@@ -155,6 +216,16 @@ describe('Plugin', () => {
       expect(addChildSpy).toHaveBeenCalledWith(instanceOf(MockNestedPropertyRendererComponent));
     });
 
+    it('should register the property visuals CodeMirror extension', async () => {
+      const plugin = new Plugin(app, manifest);
+      const registerEditorExtensionSpy = vi.spyOn(plugin, 'registerEditorExtension');
+      await plugin.onload();
+
+      const visuals = castTo<VisualsWithRefresh>(instanceOf(MockPropertyFieldVisualsComponent));
+      expect(visuals.createEditorExtension).toHaveBeenCalledTimes(1);
+      expect(registerEditorExtensionSpy).toHaveBeenCalledWith([]);
+    });
+
     it('should register the toggle-full-key-display command', async () => {
       const plugin = new Plugin(app, manifest);
       const addCommandSpy = vi.spyOn(plugin, 'addCommand');
@@ -162,7 +233,7 @@ describe('Plugin', () => {
 
       expect(addCommandSpy).toHaveBeenCalledWith(expect.objectContaining({
         id: 'toggle-full-key-display',
-        name: 'Toggle full key display'
+        name: 'Toggle full key names'
       }));
     });
 
@@ -258,6 +329,41 @@ describe('Plugin', () => {
       expect(params?.app).toBe(app);
       expect(params?.pluginId).toBe(manifest.id);
       expect(params?.pluginVersion).toBe(manifest.version);
+    });
+
+    it('should refresh visuals after settings changes and manage Style Settings across windows', async () => {
+      const plugin = new Plugin(app, manifest);
+      const addSettingTabSpy = vi.spyOn(plugin, 'addSettingTab');
+      const registerSpy = vi.spyOn(plugin, 'register');
+      const workspaceOnSpy = vi.spyOn(app.workspace, 'on');
+      await plugin.onload();
+
+      expect(lifecycleMocks.start).toHaveBeenCalledWith(lifecycleMocks.documents);
+      const settingTab = castTo<SettingTabWithCallback>(addSettingTabSpy.mock.calls[0]?.[0]);
+      settingTab.onSettingsChanged();
+      const renderer = castTo<RendererWithToggle>(instanceOf(MockNestedPropertyRendererComponent));
+      const visuals = castTo<VisualsWithRefresh>(instanceOf(MockPropertyFieldVisualsComponent));
+      expect(renderer.refreshSettings).toHaveBeenCalledTimes(1);
+      expect(visuals.refresh).toHaveBeenCalledTimes(1);
+
+      const windowOpenCall = workspaceOnSpy.mock.calls.find((call) => call[0].startsWith('window-'));
+      const openedDocument = castTo<Document>({ id: 'opened-document' });
+      castTo<WindowOpenCallback>(windowOpenCall?.[1])(undefined, { document: openedDocument });
+      expect(lifecycleMocks.observeDocument).toHaveBeenCalledWith(openedDocument);
+
+      const stopCleanup = registerSpy.mock.calls.map((call) => call[0]).find((cleanup) => cleanup.toString().includes('styleSettingsPrecisionControls.stop'));
+      expect(stopCleanup).toBeDefined();
+      stopCleanup?.();
+      expect(lifecycleMocks.stop).toHaveBeenCalledTimes(1);
+    });
+
+    it('should not force a synchronous global Style Settings reparse during startup', async () => {
+      const plugin = new Plugin(app, manifest);
+      const triggerSpy = vi.spyOn(app.workspace, 'trigger');
+
+      await plugin.onload();
+
+      expect(triggerSpy.mock.calls.some((call) => call[0] === 'parse-style-settings')).toBe(false);
     });
   });
 });

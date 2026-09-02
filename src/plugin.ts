@@ -2,12 +2,16 @@ import { invokeAsyncSafely } from 'obsidian-dev-utils/async';
 import { OpenDemoVaultCommandHandler } from 'obsidian-dev-utils/obsidian/command-handlers/open-demo-vault-command-handler';
 import { PluginDataHandler } from 'obsidian-dev-utils/obsidian/data-handler';
 import { PluginBase } from 'obsidian-dev-utils/obsidian/plugin/plugin';
+import { getAllDomWindows } from 'obsidian-dev-utils/obsidian/workspace';
 
 import { NestedPropertyRendererComponent } from './nested-property-renderer.ts';
 import { NestedPropertyVaultOpsComponent } from './nested-property-vault-ops-component.ts';
 import { NestedPropertySearchPatchComponent } from './patches/nested-property-search-patch-component.ts';
+import { NestedPropertiesPluginSettingTab } from './plugin-setting-tab.ts';
 import { PluginSettingsComponent } from './plugin-settings-component.ts';
 import { PluginSettings } from './plugin-settings.ts';
+import { PropertyFieldVisualsComponent } from './property-field-visuals.ts';
+import { StyleSettingsPrecisionControls } from './style-settings-precision.ts';
 
 export class Plugin extends PluginBase {
   protected override async onloadImpl(): Promise<void> {
@@ -20,10 +24,10 @@ export class Plugin extends PluginBase {
       })
     );
     this.pluginSettingsComponent = pluginSettingsComponent;
-    // Since obsidian-dev-utils 90 a child is loaded as it is added, so the settings' async load tail runs
-    // In parallel with the components added below instead of before them. The renderer reads
-    // `isFullKeyDisplayEnabled` in its synchronous `onload` and never re-reads it on the initial load, so
-    // Without this wait a stored `true` was read as its default `false` for the whole session.
+    // Since obsidian-dev-utils 90 a child is loaded as it is added, the settings' async load tail runs
+    // In parallel with the components added below instead of before them. The renderer derives each
+    // Note's initial header-toggle states during its synchronous load, so wait for persisted settings
+    // Before constructing it.
     await pluginSettingsComponent.loadWithPromises();
 
     const nestedPropertyRendererComponent = this.addChild(
@@ -32,12 +36,41 @@ export class Plugin extends PluginBase {
         pluginSettingsComponent
       })
     );
+    const propertyFieldVisualsComponent = this.addChild(
+      new PropertyFieldVisualsComponent({
+        app: this.app,
+        pluginSettingsComponent
+      })
+    );
+    this.registerEditorExtension(propertyFieldVisualsComponent.createEditorExtension());
+    this.addSettingTab(
+      new NestedPropertiesPluginSettingTab({
+        app: this.app,
+        onSettingsChanged: (key, value): void => {
+          nestedPropertyRendererComponent.refreshSettings(key, value);
+          propertyFieldVisualsComponent.refresh();
+        },
+        plugin: this,
+        pluginSettingsComponent
+      })
+    );
+
+    const styleSettingsPrecisionControls = new StyleSettingsPrecisionControls();
+    this.app.workspace.onLayoutReady(() => {
+      styleSettingsPrecisionControls.start([...getAllDomWindows(this.app)].map((win) => win.document));
+    });
+    this.registerEvent(this.app.workspace.on('window-open', (_workspaceWindow, openedWindow) => {
+      styleSettingsPrecisionControls.observeDocument(openedWindow.document);
+    }));
+    this.register(() => {
+      styleSettingsPrecisionControls.stop();
+    });
     this.addCommand({
       callback: () => {
         nestedPropertyRendererComponent.toggleFullKeyDisplay();
       },
       id: 'toggle-full-key-display',
-      name: 'Toggle full key display'
+      name: 'Toggle full key names'
     });
     const nestedPropertyVaultOpsComponent = this.addChild(
       new NestedPropertyVaultOpsComponent({

@@ -89,5 +89,29 @@ export const config = defineObsidianPluginVitestConfig({
         }
       }
     ];
+  },
+  editContext(context: ObsidianPluginVitestConfigContext): void {
+    // The shared test runner supplies this flag for Node releases that expose Web Storage globally.
+    // Some maintained Node builds reject the flag outright, so omit it only when the runtime says
+    // It is unsupported; supported runtimes retain the upstream isolation behavior.
+    if (!process.allowedNodeEnvironmentFlags.has('--no-webstorage')) {
+      context.unitTests.execArgv = [];
+    }
+    const obsidianInstallerVersion = process.env['OBSIDIAN_INSTALLER_VERSION'];
+    if (obsidianInstallerVersion !== undefined) {
+      context.desktop.environmentOptions = {
+        obsidianTransport: {
+          isObsidianAppVisible: false,
+          obsidianInstallerVersion,
+          obsidianVersion: process.env['OBSIDIAN_VERSION'] ?? obsidianInstallerVersion,
+          shouldDisableSandbox: true,
+          type: 'obsidian-cdp'
+        }
+      };
+    }
   }
 });
+
+// The project scripts import the named export, while Vitest's direct --config loader requires this.
+// eslint-disable-next-line import-x/no-default-export -- Support Vitest's direct config-file loader.
+export default config;
