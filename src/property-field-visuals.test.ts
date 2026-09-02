@@ -10,8 +10,6 @@ import type { PropertyFieldNode } from './property-field-tree.ts';
 
 import { PluginSettings } from './plugin-settings.ts';
 import {
-  applyRecordedPropertyEditRedo,
-  applyRedoFallback,
   buildRoundedPath,
   computeTextReplacement,
   createCssNumberReader,
@@ -36,14 +34,14 @@ import {
   removeSourceViewVisualArtifacts,
   resolveBreadcrumbActivationScope,
   resolveCodeMirrorDocumentLine,
+  resolveCodeMirrorDocumentLineAtPointer,
   resolveCodeMirrorLineElementAtPointer,
   resolveDomBreadcrumbPropertyAtPointer,
   resolveDomPropertyAtPointer,
   resolveSourceBreadcrumbLineAtPointer,
   resolveSourceLine,
   resolveSourceLineElementAtPointer,
-  scrollElementWithinContainer,
-  shouldUsePropertyRedoFallback
+  scrollElementWithinContainer
 } from './property-field-visuals.ts';
 
 interface TestActiveField {
@@ -53,6 +51,8 @@ interface TestActiveField {
 
 interface TestCodeMirrorChange {
   changes: TestCodeMirrorChangeRange;
+  scrollIntoView: boolean;
+  selection: unknown;
 }
 
 interface TestCodeMirrorChangeRange {
@@ -73,17 +73,15 @@ interface TestDocumentState {
   hoveredBreadcrumbField: HTMLElement | null;
   hoveredThreadingField: HTMLElement | null;
   isApplyingPropertyHistory: boolean;
-  isPropertyRedoArmed: boolean;
   lastPropertyEdit: unknown;
   lastPropertyEditorView: unknown;
   metadataContainerCleanups: Map<HTMLElement, () => void>;
   mutationObserver: MutationObserver | null;
-  pendingPropertyRedo: unknown;
-  pointerSurfaceCleanups: Map<HTMLElement, () => void>;
   popover: HTMLElement | null;
   propertyEditCaptureTimer: null;
+  propertyEditCommitPending: boolean;
+  propertyEditDraft: unknown;
   propertyEditStart: unknown;
-  redoFallbackTimer: null;
   renderedContainers: Set<HTMLElement>;
   renderedSourceViews: Set<HTMLElement>;
   renderFrame: null;
@@ -92,9 +90,24 @@ interface TestDocumentState {
   sourceModeObservers: Map<HTMLElement, MutationObserver>;
 }
 
+interface TestDocumentTextLine {
+  from: number;
+  text: string;
+}
+
 interface TestEditorPosition {
   ch: number;
   line: number;
+}
+
+interface TestMeasureRequest {
+  read(): unknown;
+  write?(value: unknown): void;
+}
+
+interface TestPointerCoordinates {
+  x: number;
+  y: number;
 }
 
 interface TestPropertyFieldVisualsComponent {
@@ -107,10 +120,9 @@ interface TestPropertyFieldVisualsComponent {
   onFocusIn(ownerDocument: Document, event: FocusEvent): void;
   onFocusOut(ownerDocument: Document, event: FocusEvent): void;
   onKeyDown(ownerDocument: Document, event: KeyboardEvent): void;
-  onPointerMove(ownerDocument: Document, event: PointerEvent, codeMirrorView?: unknown): void;
+  onPointerMove(ownerDocument: Document, event: PointerEvent): void;
   onPropertyEditorChanged(ownerDocument: Document, event: Event): void;
   syncMetadataContainerListeners(ownerDocument: Document, state: TestDocumentState, containers: readonly HTMLElement[]): void;
-  syncPointerSurfaceListeners(ownerDocument: Document, state: TestDocumentState, containers: readonly HTMLElement[], sourceViews: readonly HTMLElement[]): void;
 }
 
 type VisualMutation = Parameters<typeof isPropertyFieldMutation>[0];
@@ -225,11 +237,10 @@ describe('property field visual render guards', () => {
     const key = property.createDiv({ cls: 'metadata-property-key', text: 'Key' });
     const value = property.createDiv({ cls: 'metadata-property-value', text: 'Value' });
     vi.spyOn(container, 'isShown').mockReturnValue(true);
+    vi.spyOn(sourceView, 'getBoundingClientRect').mockReturnValue({ bottom: 500, height: 500, left: 0, right: 1800, top: 0, width: 1800 } as DOMRect);
     vi.spyOn(container, 'getBoundingClientRect').mockReturnValue({ bottom: 100, height: 100, left: 100, right: 900, top: 0, width: 800 } as DOMRect);
     vi.spyOn(key, 'getBoundingClientRect').mockReturnValue({ bottom: 40, height: 20, left: 100, right: 300, top: 20, width: 200 } as DOMRect);
     vi.spyOn(value, 'getBoundingClientRect').mockReturnValue({ bottom: 40, height: 20, left: 300, right: 900, top: 20, width: 600 } as DOMRect);
-
-    component.syncPointerSurfaceListeners(document, state, [container], []);
 
     sourceView.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 1600, clientY: 30 }));
 
@@ -313,17 +324,15 @@ describe('property field visual render guards', () => {
       hoveredBreadcrumbField: null,
       hoveredThreadingField: null,
       isApplyingPropertyHistory: false,
-      isPropertyRedoArmed: false,
       lastPropertyEdit: null,
       lastPropertyEditorView: null,
       metadataContainerCleanups: new Map(),
       mutationObserver: null,
-      pendingPropertyRedo: null,
-      pointerSurfaceCleanups: new Map(),
       popover: null,
       propertyEditCaptureTimer: null,
+      propertyEditCommitPending: false,
+      propertyEditDraft: null,
       propertyEditStart: null,
-      redoFallbackTimer: null,
       renderedContainers: new Set(),
       renderedSourceViews: new Set(),
       renderFrame: null,
@@ -344,9 +353,8 @@ describe('property field visual render guards', () => {
     vi.spyOn(value, 'getBoundingClientRect').mockReturnValue({ bottom: 40, height: 20, left: 300, right: 900, top: 20, width: 600 } as DOMRect);
 
     component.syncMetadataContainerListeners(document, state, [container]);
-    component.syncPointerSurfaceListeners(document, state, [container], []);
     expect(state.metadataContainerCleanups.has(container)).toBe(true);
-    sourceView.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 1600, clientY: 30 }));
+    component.onPointerMove(document, castTo<PointerEvent>({ clientX: 1600, clientY: 30, target: sourceView }));
 
     expect(state.active).toMatchObject({ element: property, kind: 'dom' });
     expect(state.hoveredBreadcrumbField).toBe(property);
@@ -380,33 +388,12 @@ describe('property field visual render guards', () => {
         pluginSettingsComponent: { settings }
       }))
     );
-    const state = castTo<TestDocumentState>({
-      active: null,
-      bodyStyleObserver: null,
-      cleanups: [],
-      hideTimer: null,
-      hoveredBreadcrumbField: null,
-      hoveredThreadingField: null,
-      isApplyingPropertyHistory: false,
-      isPropertyRedoArmed: false,
-      lastPropertyEdit: null,
-      lastPropertyEditorView: null,
-      metadataContainerCleanups: new Map(),
-      mutationObserver: null,
-      pendingPropertyRedo: null,
-      pointerSurfaceCleanups: new Map(),
-      popover: null,
-      propertyEditCaptureTimer: null,
-      propertyEditStart: null,
-      redoFallbackTimer: null,
-      renderedContainers: new Set(),
-      renderedSourceViews: new Set(),
-      renderFrame: null,
-      renderGeneration: 0,
-      sourceHighlight: null,
-      sourceModeObservers: new Map()
-    });
-    component.documentStates.set(document, state);
+    component.observeDocument(document);
+    const state = component.documentStates.get(document);
+    expect(state).toBeDefined();
+    if (state === undefined) {
+      throw new Error('Expected document state');
+    }
     const sourceView = document.body.createDiv({ cls: 'markdown-source-view mod-cm6' });
     const content = sourceView.createDiv({ cls: 'cm-content' });
     const rootLine = content.createDiv({ cls: 'cm-line', text: 'root: value' });
@@ -425,18 +412,22 @@ describe('property field visual render guards', () => {
     component.findMarkdownView = (): unknown => view;
     const codeMirrorView = {
       contentDOM: content,
+      coordsAtPos: (): DOMRect => ({ bottom: 40, height: 20, left: 120, right: 120, top: 20, width: 0 } as DOMRect),
       dom: content,
+      posAtCoords: ({ y }: TestPointerCoordinates): number => y < 50 ? source.indexOf('root:') : source.indexOf('root.child'),
       posAtDOM: (lineElement: HTMLElement): number => lineElement === rootLine ? source.indexOf('root:') : source.indexOf('root.child'),
       state: {
         doc: {
+          line: (number: number): TestDocumentTextLine =>
+            number === 2
+              ? { from: source.indexOf('root:'), text: 'root: value' }
+              : { from: source.indexOf('root.child'), text: 'root.child: value' },
           lineAt: (position: number): TestDocumentLine => ({ number: position === source.indexOf('root:') ? 2 : 3 }),
           toString: (): string => source
         }
       }
     };
     component.codeMirrorViews.add(codeMirrorView);
-    component.syncPointerSurfaceListeners(document, state, [], [sourceView]);
-
     sourceView.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 980, clientY: 30 }));
 
     expect(state.active).toMatchObject({ kind: 'source', line: 1 });
@@ -451,6 +442,11 @@ describe('property field visual render guards', () => {
     expect(state.hoveredThreadingField).toBe(flattenedLine);
     expect(flattenedLine.classList.contains('np-property-field-source-highlight')).toBe(true);
     expect(scrollIntoView).not.toHaveBeenCalled();
+    state.mutationObserver?.disconnect();
+    state.bodyStyleObserver?.disconnect();
+    for (const cleanup of state.cleanups) {
+      cleanup();
+    }
     state.popover?.remove();
     sourceView.remove();
     component.codeMirrorViews.clear();
@@ -526,52 +522,33 @@ describe('property field visual render guards', () => {
         pluginSettingsComponent: { settings }
       }))
     );
-    const state = castTo<TestDocumentState>({
-      active: null,
-      bodyStyleObserver: null,
-      cleanups: [],
-      hideTimer: null,
-      hoveredBreadcrumbField: null,
-      hoveredThreadingField: null,
-      isApplyingPropertyHistory: false,
-      isPropertyRedoArmed: false,
-      lastPropertyEdit: null,
-      lastPropertyEditorView: null,
-      metadataContainerCleanups: new Map(),
-      mutationObserver: null,
-      pendingPropertyRedo: null,
-      pointerSurfaceCleanups: new Map(),
-      popover: null,
-      propertyEditCaptureTimer: null,
-      propertyEditStart: null,
-      redoFallbackTimer: null,
-      renderedContainers: new Set(),
-      renderedSourceViews: new Set(),
-      renderFrame: null,
-      renderGeneration: 0,
-      sourceHighlight: null,
-      sourceModeObservers: new Map()
-    });
-    component.documentStates.set(document, state);
+    component.observeDocument(document);
+    const state = component.documentStates.get(document);
+    expect(state).toBeDefined();
+    if (state === undefined) {
+      throw new Error('Expected document state');
+    }
     const sourceView = document.body.createDiv({ cls: ['markdown-source-view', 'is-live-preview'] });
     const container = sourceView.createDiv({ cls: 'metadata-container' });
     const property = container.createDiv({ cls: 'metadata-property' });
     const key = property.createDiv({ cls: 'metadata-property-key', text: 'Key' });
     const icon = key.createDiv({ cls: 'metadata-property-icon' });
+    const iconSvg = icon.createSvg('svg');
     const keyInput = key.createEl('input', { cls: 'metadata-property-key-input' });
     const value = property.createDiv({ cls: 'metadata-property-value', text: 'Value' });
     vi.spyOn(sourceView, 'getBoundingClientRect').mockReturnValue({ bottom: 500, height: 500, left: 0, right: 1800, top: 0, width: 1800 } as DOMRect);
     vi.spyOn(container, 'getBoundingClientRect').mockReturnValue({ bottom: 100, height: 100, left: 100, right: 900, top: 0, width: 800 } as DOMRect);
     vi.spyOn(key, 'getBoundingClientRect').mockReturnValue({ bottom: 40, height: 20, left: 10, right: 900, top: 20, width: 890 } as DOMRect);
-    vi.spyOn(icon, 'getBoundingClientRect').mockReturnValue({ bottom: 40, height: 20, left: 10, right: 30, top: 20, width: 20 } as DOMRect);
+    vi.spyOn(icon, 'getBoundingClientRect').mockReturnValue({ bottom: 40, height: 20, left: 10, right: 250, top: 20, width: 240 } as DOMRect);
+    vi.spyOn(iconSvg, 'getBoundingClientRect').mockReturnValue({ bottom: 40, height: 20, left: 10, right: 30, top: 20, width: 20 } as DOMRect);
     vi.spyOn(keyInput, 'getBoundingClientRect').mockReturnValue({ bottom: 40, height: 20, left: 30, right: 250, top: 20, width: 220 } as DOMRect);
     vi.spyOn(value, 'getBoundingClientRect').mockReturnValue({ bottom: 40, height: 20, left: 250, right: 900, top: 20, width: 650 } as DOMRect);
 
-    component.syncPointerSurfaceListeners(document, state, [container], []);
     key.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 100, clientY: 30 }));
     expect(state.hoveredBreadcrumbField).toBe(property);
     sourceView.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 800, clientY: 30 }));
     expect(state.hoveredBreadcrumbField).toBeNull();
+    expect(state.popover).toBeNull();
     vi.advanceTimersByTime(121);
     expect(state.popover).toBeNull();
 
@@ -581,9 +558,16 @@ describe('property field visual render guards', () => {
     expect(state.hoveredBreadcrumbField).toBe(property);
     key.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 100, clientY: 30 }));
     expect(state.hoveredBreadcrumbField).toBeNull();
+    expect(state.popover).toBeNull();
     vi.advanceTimersByTime(121);
     expect(state.popover).toBeNull();
 
+    state.mutationObserver?.disconnect();
+    state.bodyStyleObserver?.disconnect();
+    for (const cleanup of state.cleanups) {
+      cleanup();
+    }
+    state.popover?.remove();
     sourceView.remove();
     component.documentStates.delete(document);
     Reflect.deleteProperty(window.HTMLElement.prototype, 'scrollIntoView');
@@ -692,56 +676,13 @@ describe('property field visual render guards', () => {
     sourceView.remove();
   });
 
-  it('should preserve native editing history except after leaving a Live Preview property editor', () => {
-    const input = document.body.createEl('input');
-    const sourceView = document.body.createDiv({ cls: 'markdown-source-view' });
-    const sourceContent = sourceView.createDiv({ attr: { contenteditable: 'true' }, cls: 'cm-content' });
-    const livePreviewView = document.body.createDiv({ cls: ['markdown-source-view', 'is-live-preview'] });
-    const livePreviewContent = livePreviewView.createDiv({ attr: { contenteditable: 'true' }, cls: 'cm-content' });
-    const metadataContainer = livePreviewContent.createDiv({ cls: 'metadata-container' });
-    const propertyEditor = metadataContainer.createDiv({ attr: { contenteditable: 'true' } });
-
-    expect(shouldUsePropertyRedoFallback(document.body)).toBe(true);
-    expect(shouldUsePropertyRedoFallback(input)).toBe(false);
-    expect(shouldUsePropertyRedoFallback(sourceContent)).toBe(false);
-    expect(shouldUsePropertyRedoFallback(livePreviewContent)).toBe(true);
-    expect(shouldUsePropertyRedoFallback(propertyEditor)).toBe(false);
-
-    input.remove();
-    sourceView.remove();
-    livePreviewView.remove();
+  it('should compute the exact document replacement for a captured Properties edit', () => {
+    const before = '---\nroot: before\n---';
+    expect(computeTextReplacement(before, '---\nroot: after\n---')).toEqual({ end: 16, replacement: 'after', start: 10 });
+    expect(computeTextReplacement(before, before)).toBeNull();
   });
 
-  it('should invoke the redo fallback only when Obsidian did not already handle the shortcut', () => {
-    const redo = vi.fn();
-    expect(applyRedoFallback({ getValue: () => 'unchanged', redo }, 'unchanged')).toBe(true);
-    expect(redo).toHaveBeenCalledTimes(1);
-
-    expect(applyRedoFallback({ getValue: () => 'native redo result', redo }, 'before redo')).toBe(false);
-    expect(redo).toHaveBeenCalledTimes(1);
-  });
-
-  it('should replay an exact captured Properties edit after Ctrl+Z when native redo is empty', () => {
-    let value = '---\nroot: before\n---';
-    const replaceRange = vi.fn((replacement: string, from: TestEditorPosition, to: TestEditorPosition): void => {
-      value = value.slice(0, from.ch) + replacement + value.slice(to.ch);
-    });
-    const editor = {
-      getValue: (): string => value,
-      offsetToPos: (offset: number): TestEditorPosition => ({ ch: offset, line: 0 }),
-      redo: vi.fn(),
-      replaceRange
-    };
-
-    expect(computeTextReplacement(value, '---\nroot: after\n---')).toEqual({ end: 16, replacement: 'after', start: 10 });
-    expect(applyRecordedPropertyEditRedo(editor, { after: '---\nroot: after\n---', before: value })).toBe(true);
-    expect(value).toBe('---\nroot: after\n---');
-    expect(replaceRange).toHaveBeenCalledTimes(1);
-    expect(applyRecordedPropertyEditRedo(editor, { after: 'different', before: 'unrelated' })).toBe(false);
-    expect(computeTextReplacement(value, value)).toBeNull();
-  });
-
-  it('should own escaped Live Preview property undo and redo without scrolling the editor selection', () => {
+  it('should retain an escaped Live Preview edit through metadata focus handoffs and own both history directions without scrolling', () => {
     vi.useFakeTimers();
     const settings = new PluginSettings();
     const component = castTo<TestPropertyFieldVisualsComponent>(
@@ -757,19 +698,17 @@ describe('property field visual render guards', () => {
     const metadataContainer = containerEl.createDiv({ cls: 'metadata-container' });
     const property = metadataContainer.createDiv({ cls: 'metadata-property' });
     const propertyInput = property.createEl('input');
+    const editorContent = containerEl.createDiv({ attr: { contenteditable: 'true' }, cls: 'cm-content' });
     propertyInput.focus();
-    const replaceRange = vi.fn((replacement: string, from: TestEditorPosition, to: TestEditorPosition): void => {
-      value = value.slice(0, from.ch) + replacement + value.slice(to.ch);
-    });
     const view = {
       containerEl,
       editor: {
         getValue: (): string => value,
-        offsetToPos: (offset: number): TestEditorPosition => ({ ch: offset, line: 0 }),
         redo: vi.fn(),
-        replaceRange
+        undo: vi.fn()
       }
     };
+    const preservedSelection = { main: { anchor: 0, head: 0 } };
     const dispatch = vi.fn((transaction: TestCodeMirrorChange): void => {
       const { from, insert, to } = transaction.changes;
       value = value.slice(0, from) + insert + value.slice(to);
@@ -781,11 +720,13 @@ describe('property field visual render guards', () => {
       contentDOM: containerEl,
       dispatch,
       dom: containerEl,
+      requestMeasure: vi.fn((request: TestMeasureRequest): void => request.write?.(request.read())),
       scrollDOM,
       state: {
         doc: {
           toString: (): string => value
-        }
+        },
+        selection: preservedSelection
       }
     };
     const state = castTo<TestDocumentState>({
@@ -796,17 +737,15 @@ describe('property field visual render guards', () => {
       hoveredBreadcrumbField: null,
       hoveredThreadingField: null,
       isApplyingPropertyHistory: false,
-      isPropertyRedoArmed: false,
       lastPropertyEdit: null,
       lastPropertyEditorView: view,
       metadataContainerCleanups: new Map(),
       mutationObserver: null,
-      pendingPropertyRedo: null,
-      pointerSurfaceCleanups: new Map(),
       popover: null,
       propertyEditCaptureTimer: null,
+      propertyEditCommitPending: false,
+      propertyEditDraft: null,
       propertyEditStart: { before, view },
-      redoFallbackTimer: null,
       renderedContainers: new Set(),
       renderedSourceViews: new Set(),
       renderFrame: null,
@@ -827,17 +766,18 @@ describe('property field visual render guards', () => {
       view: codeMirrorView,
       viewportChanged: false
     }));
-    expect(state.lastPropertyEdit).toMatchObject({ after, before, view });
+    expect(state.propertyEditDraft).toMatchObject({ after, before, view });
+    expect(state.lastPropertyEdit).toBeNull();
 
     component.onKeyDown(document, castTo<KeyboardEvent>({ altKey: false, ctrlKey: false, key: 'Escape', metaKey: false, repeat: false, shiftKey: false, target: propertyInput }));
-    expect(state.isPropertyRedoArmed).toBe(true);
-    const editStart = state.propertyEditStart;
-    component.onPropertyEditorChanged(document, castTo<Event>({ target: scrollDOM }));
-    expect(state.isPropertyRedoArmed).toBe(true);
-    expect(state.propertyEditStart).toBe(editStart);
     expect(state.lastPropertyEdit).toMatchObject({ after, before, view });
-    component.onFocusOut(document, castTo<FocusEvent>({ relatedTarget: metadataContainer, target: propertyInput }));
-    expect(state.isPropertyRedoArmed).toBe(true);
+    component.onFocusOut(document, castTo<FocusEvent>({ relatedTarget: editorContent, target: propertyInput }));
+    // Obsidian replaces/refocuses metadata controls as the edit commits.
+    // Previously, this event discarded the captured transaction before Ctrl+Z reached the document.
+    component.onFocusIn(document, castTo<FocusEvent>({ target: propertyInput }));
+    expect(state.propertyEditStart).toMatchObject({ before: after, view });
+    expect(state.lastPropertyEdit).toMatchObject({ after, before, view });
+    editorContent.focus();
     const undoPreventDefault = vi.fn();
     const undoStopImmediatePropagation = vi.fn();
     component.onKeyDown(
@@ -851,15 +791,17 @@ describe('property field visual render guards', () => {
         repeat: false,
         shiftKey: false,
         stopImmediatePropagation: undoStopImmediatePropagation,
-        target: propertyInput
+        target: editorContent
       })
     );
     expect(value).toBe(before);
     expect(undoPreventDefault).toHaveBeenCalledTimes(1);
     expect(undoStopImmediatePropagation).toHaveBeenCalledTimes(1);
+    expect(scrollDOM.scrollTop).toBe(96);
+    expect(scrollDOM.scrollLeft).toBe(7);
     component.onFocusIn(document, castTo<FocusEvent>({ target: propertyInput }));
-    expect(state.isPropertyRedoArmed).toBe(true);
-    expect(state.pendingPropertyRedo).not.toBeNull();
+    expect(state.lastPropertyEdit).toMatchObject({ after, before, view });
+    editorContent.focus();
     const redoPreventDefault = vi.fn();
     const redoStopImmediatePropagation = vi.fn();
     component.onKeyDown(
@@ -872,44 +814,22 @@ describe('property field visual render guards', () => {
         preventDefault: redoPreventDefault,
         repeat: false,
         shiftKey: false,
-        stopImmediatePropagation: redoStopImmediatePropagation
+        stopImmediatePropagation: redoStopImmediatePropagation,
+        target: editorContent
       })
     );
     vi.runAllTimers();
 
+    expect(view.editor.undo).not.toHaveBeenCalled();
     expect(view.editor.redo).not.toHaveBeenCalled();
-    expect(replaceRange).not.toHaveBeenCalled();
     expect(dispatch).toHaveBeenCalledTimes(2);
-    expect(dispatch.mock.calls[0]?.[0]).not.toHaveProperty('selection');
-    expect(dispatch.mock.calls[0]?.[0]).not.toHaveProperty('scrollIntoView');
+    expect(dispatch.mock.calls[0]?.[0]).toMatchObject({ scrollIntoView: false, selection: preservedSelection });
+    expect(dispatch.mock.calls[1]?.[0]).toMatchObject({ scrollIntoView: false, selection: preservedSelection });
     expect(redoPreventDefault).toHaveBeenCalledTimes(1);
     expect(redoStopImmediatePropagation).toHaveBeenCalledTimes(1);
     expect(value).toBe(after);
-    expect(state.pendingPropertyRedo).toBeNull();
-
-    containerEl.classList.remove('is-live-preview');
-    const sourcePreventDefault = vi.fn();
-    component.onKeyDown(
-      document,
-      castTo<KeyboardEvent>({
-        altKey: false,
-        ctrlKey: true,
-        key: 'z',
-        metaKey: false,
-        preventDefault: sourcePreventDefault,
-        repeat: false,
-        shiftKey: false,
-        stopImmediatePropagation: vi.fn()
-      })
-    );
-    expect(sourcePreventDefault).not.toHaveBeenCalled();
-    scrollDOM.scrollTop = 999;
-    scrollDOM.scrollLeft = 999;
-    vi.runAllTimers();
     expect(scrollDOM.scrollTop).toBe(96);
     expect(scrollDOM.scrollLeft).toBe(7);
-    expect(dispatch).toHaveBeenCalledTimes(2);
-    expect(value).toBe(after);
 
     component.codeMirrorViews.clear();
     component.documentStates.delete(document);
@@ -942,6 +862,22 @@ describe('property field visual render guards', () => {
       line
     )).toBeNull();
     line.remove();
+  });
+
+  it('should resolve a Source property row from pointer coordinates instead of its event target', () => {
+    const posAtCoords = vi.fn(() => 27);
+    const lineAt = vi.fn(() => ({ number: 4 }));
+
+    expect(resolveCodeMirrorDocumentLineAtPointer(
+      castTo<Parameters<typeof resolveCodeMirrorDocumentLineAtPointer>[0]>({
+        posAtCoords,
+        state: { doc: { lineAt } }
+      }),
+      1400,
+      84
+    )).toBe(3);
+    expect(posAtCoords).toHaveBeenCalledWith({ x: 1400, y: 84 }, false);
+    expect(lineAt).toHaveBeenCalledWith(27);
   });
 
   it('should disambiguate duplicate Source-mode keys from surrounding visible YAML lines', () => {

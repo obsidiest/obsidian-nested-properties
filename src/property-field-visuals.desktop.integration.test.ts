@@ -118,36 +118,55 @@ describe('property-field visuals in real Obsidian', () => {
         if (scroller === null) {
           throw new Error('Live Preview scroller was not found');
         }
+        const activeScroller = scroller;
 
-        scroller.scrollTop = 0;
+        activeScroller.scrollTop = 0;
         clickElement({ element: input });
         pressKey({ key: 'a', modifiers: ['Ctrl'] });
         for (const character of 'historyRootRenamed') {
           pressKey({ key: character });
         }
+        await waitUntil({
+          message: 'Trusted input did not finish renaming the property key',
+          predicate: () => input.value === 'historyRootRenamed'
+        });
         pressKey({ key: 'Escape' });
         await waitUntil({
           message: 'Property-key edit did not commit after Escape',
           predicate: () => markdownView.editor.getValue().includes('historyRootRenamed: original')
         });
-        const scrollTopBeforeHistory = scroller.scrollTop;
+        const scrollTopBeforeHistory = activeScroller.scrollTop;
+        async function measureMaximumScrollDelta(): Promise<number> {
+          let maximumDelta = 0;
+          for (let index = 0; index < 20; index += 1) {
+            await new Promise<void>((resolve) => {
+              ownerDocument.defaultView?.setTimeout(resolve, 50);
+            });
+            maximumDelta = Math.max(maximumDelta, Math.abs(activeScroller.scrollTop - scrollTopBeforeHistory));
+          }
+          return maximumDelta;
+        }
 
         pressKey({ key: 'z', modifiers: ['Ctrl'] });
         await waitUntil({
           message: 'Ctrl+Z did not undo the escaped property edit',
           predicate: () => markdownView.editor.getValue().includes('historyRoot: original')
         });
-        const scrollTopAfterUndo = scroller.scrollTop;
+        const maximumUndoScrollDelta = await measureMaximumScrollDelta();
+        const scrollTopAfterUndo = activeScroller.scrollTop;
 
         pressKey({ key: 'y', modifiers: ['Ctrl'] });
         await waitUntil({
           message: 'Ctrl+Y did not redo the escaped property edit',
           predicate: () => markdownView.editor.getValue().includes('historyRootRenamed: original')
         });
-        const scrollTopAfterRedo = scroller.scrollTop;
+        const maximumRedoScrollDelta = await measureMaximumScrollDelta();
+        const scrollTopAfterRedo = activeScroller.scrollTop;
 
         return {
           activeElementClass: ownerDocument.activeElement?.className ?? '',
+          maximumRedoScrollDelta,
+          maximumUndoScrollDelta,
           scrollTopAfterRedo,
           scrollTopAfterUndo,
           scrollTopBeforeHistory
@@ -159,6 +178,8 @@ describe('property-field visuals in real Obsidian', () => {
 
     expect(Math.abs(result.scrollTopAfterUndo - result.scrollTopBeforeHistory)).toBeLessThanOrEqual(2);
     expect(Math.abs(result.scrollTopAfterRedo - result.scrollTopBeforeHistory)).toBeLessThanOrEqual(2);
+    expect(result.maximumUndoScrollDelta).toBeLessThanOrEqual(2);
+    expect(result.maximumRedoScrollDelta).toBeLessThanOrEqual(2);
   });
 
   it('activates threading and each breadcrumb scope on its exact Live Preview surface', async () => {
@@ -185,11 +206,12 @@ describe('property-field visuals in real Obsidian', () => {
         }
         const ownerDocument = markdownView.containerEl.ownerDocument;
         const sourceView = markdownView.containerEl.querySelector<HTMLElement>('.markdown-source-view.is-live-preview');
+        const metadataHeading = markdownView.containerEl.querySelector<HTMLElement>('.metadata-properties-heading');
         const propertyRows = [...markdownView.containerEl.querySelectorAll<HTMLElement>('.metadata-property')];
         const property = propertyRows.find((row) => row.querySelector<HTMLInputElement>(':scope > .metadata-property-key .metadata-property-key-input')?.value === 'flat.object');
         const keyElement = property?.querySelector<HTMLElement>(':scope > .metadata-property-key');
         const icon = keyElement?.querySelector<HTMLElement>('.metadata-property-icon');
-        if (sourceView === null || property === undefined || keyElement === null || keyElement === undefined || icon === null || icon === undefined) {
+        if (sourceView === null || metadataHeading === null || property === undefined || keyElement === null || keyElement === undefined || icon === null || icon === undefined) {
           throw new Error('Live Preview pointer fixture did not render');
         }
         const rowRect = keyElement.getBoundingClientRect();
@@ -201,6 +223,13 @@ describe('property-field visuals in real Obsidian', () => {
         }
         function isThreadActive(): boolean {
           return ownerDocument.querySelector('.np-property-thread-active, .np-property-thread-all, .np-property-thread-root-active, .np-property-thread-root-all') !== null;
+        }
+        async function nextAnimationFrame(): Promise<void> {
+          await new Promise<void>((resolve) => {
+            ownerDocument.defaultView?.requestAnimationFrame(() => {
+              resolve();
+            });
+          });
         }
         async function waitForPopover(message: string): Promise<void> {
           await waitUntil({ message, predicate: isPopoverVisible });
@@ -215,7 +244,8 @@ describe('property-field visuals in real Obsidian', () => {
         await waitUntil({ message: 'Full-row hover did not activate property threading', predicate: isThreadActive });
         const isFullFieldActivated = isPopoverVisible() && isThreadActive();
 
-        moveMouse({ x: sourceRect.right - 24, y: Math.min(sourceRect.bottom - 12, rowRect.bottom + 60) });
+        const metadataHeadingRect = metadataHeading.getBoundingClientRect();
+        moveMouse({ x: (metadataHeadingRect.left + metadataHeadingRect.right) / 2, y: (metadataHeadingRect.top + metadataHeadingRect.bottom) / 2 });
         await waitForPopoverToHide('Full-field breadcrumb did not deactivate after leaving its row');
 
         await setScope(false, true);
@@ -231,6 +261,9 @@ describe('property-field visuals in real Obsidian', () => {
         await waitForPopover('Full-key hover did not show its breadcrumb');
         const isFullKeyActivated = isPopoverVisible();
         moveMouse({ x: Math.min(sourceRect.right - 24, keyContentRight + 80), y: rowY });
+        await nextAnimationFrame();
+        const isFullKeyImmediatelyDeactivated = !isPopoverVisible();
+        const isThreadActiveOutsideKey = isThreadActive();
         await waitForPopoverToHide('Full-key breadcrumb remained active outside the property key');
         const isFullKeyDeactivated = !isPopoverVisible();
 
@@ -240,6 +273,8 @@ describe('property-field visuals in real Obsidian', () => {
         await waitForPopover('Icon-only hover did not show its breadcrumb');
         const isIconActivated = isPopoverVisible();
         moveMouse({ x: Math.min(sourceRect.right - 24, iconRect.right + 60), y: rowY });
+        await nextAnimationFrame();
+        const isIconImmediatelyDeactivated = !isPopoverVisible();
         await waitForPopoverToHide('Icon-only breadcrumb remained active outside the property icon');
         const isIconDeactivated = !isPopoverVisible();
 
@@ -247,8 +282,11 @@ describe('property-field visuals in real Obsidian', () => {
           fullFieldActivated: isFullFieldActivated,
           fullKeyActivated: isFullKeyActivated,
           fullKeyDeactivated: isFullKeyDeactivated,
+          fullKeyImmediatelyDeactivated: isFullKeyImmediatelyDeactivated,
           iconActivated: isIconActivated,
-          iconDeactivated: isIconDeactivated
+          iconDeactivated: isIconDeactivated,
+          iconImmediatelyDeactivated: isIconImmediatelyDeactivated,
+          threadActiveOutsideKey: isThreadActiveOutsideKey
         };
       },
       contextId,
@@ -259,8 +297,11 @@ describe('property-field visuals in real Obsidian', () => {
       fullFieldActivated: true,
       fullKeyActivated: true,
       fullKeyDeactivated: true,
+      fullKeyImmediatelyDeactivated: true,
       iconActivated: true,
-      iconDeactivated: true
+      iconDeactivated: true,
+      iconImmediatelyDeactivated: true,
+      threadActiveOutsideKey: true
     });
   });
 
