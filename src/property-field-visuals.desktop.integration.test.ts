@@ -109,10 +109,10 @@ describe('property-field visuals in real Obsidian', () => {
       callback: async ({ context: { markdownView }, lib: { clickElement, pressKey, waitUntil } }) => {
         const ownerDocument = markdownView.containerEl.ownerDocument;
         const sourceView = markdownView.containerEl.querySelector<HTMLElement>('.markdown-source-view.is-live-preview');
-        const metadataHeading = markdownView.containerEl.querySelector<HTMLElement>('.metadata-properties-heading');
+        const focusExitTarget = markdownView.leaf.containerEl.querySelector<HTMLElement>('.view-header-title-container, .view-header');
         const inputs = [...markdownView.containerEl.querySelectorAll<HTMLInputElement>('.metadata-property-key-input')];
         const input = inputs.find((candidate) => candidate.value === 'historyRoot');
-        if (sourceView === null || metadataHeading === null || input === undefined) {
+        if (sourceView === null || focusExitTarget === null || input === undefined) {
           throw new Error('Live Preview history fixture did not render');
         }
         const scroller = sourceView.querySelector<HTMLElement>('.cm-scroller');
@@ -131,7 +131,11 @@ describe('property-field visuals in real Obsidian', () => {
           message: 'Trusted input did not finish renaming the property key',
           predicate: () => input.value === 'historyRootRenamed'
         });
-        clickElement({ element: metadataHeading });
+        clickElement({ element: focusExitTarget });
+        await waitUntil({
+          message: 'Trusted click did not leave the property editor',
+          predicate: () => ownerDocument.activeElement?.closest('.metadata-container') === null
+        });
         await waitUntil({
           message: 'Property-key edit did not commit after leaving the field',
           predicate: () => markdownView.editor.getValue().includes('historyRootRenamed: original')
@@ -150,7 +154,7 @@ describe('property-field visuals in real Obsidian', () => {
 
         pressKey({ key: 'z', modifiers: ['Ctrl'] });
         await waitUntil({
-          message: 'Ctrl+Z did not undo the escaped property edit',
+          message: 'Ctrl+Z did not undo the committed property edit',
           predicate: () => markdownView.editor.getValue().includes('historyRoot: original')
         });
         const maximumUndoScrollDelta = await measureMaximumScrollDelta();
